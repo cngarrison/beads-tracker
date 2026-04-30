@@ -5,6 +5,22 @@ import SwiftUI
 import AppKit
 import WebKit
 
+// MARK: - Search Scope
+
+enum SearchScope: String, CaseIterable {
+    case title       = "Title"
+    case description = "Description"
+    case notes       = "Notes"
+
+    var flag: String {
+        switch self {
+        case .title:       return "--title-contains"
+        case .description: return "--desc-contains"
+        case .notes:       return "--notes-contains"
+        }
+    }
+}
+
 // MARK: - Issue List View
 
 struct IssueListView: View {
@@ -27,11 +43,56 @@ struct IssueListView: View {
     // Selection state: @State intermediary synced with @SceneStorage
     // (needed because List selection binding requires the state to be applied AFTER rows render)
     @State private var selectedIDs: Set<String> = []
+    @State private var selectedStatuses:  Set<String> = ["open"]
+    @State private var selectedPriorities: Set<String> = ["0", "1", "2", "3", "4"]
+    @State private var selectedTypes:      Set<String> = ["bug", "feature", "task", "epic", "chore", "decision"]
+    @State private var titleSearch: String = ""
+    @State private var searchScope: SearchScope = .title
+    @State private var searchDebounceTask: DispatchWorkItem? = nil
     
     // Expanded state: computed property works fine with DisclosureGroup
     private var expandedIDs: Set<String> {
         get { decodeIDSet(expandedIDsJSON) }
         nonmutating set { expandedIDsJSON = encodeIDSet(newValue) }
+    }
+
+    private var statusFilterArgs: [String] {
+        let all: Set<String> = ["open", "in_progress", "blocked", "deferred", "closed"]
+        if selectedStatuses.isEmpty || selectedStatuses == all {
+            return ["--all"]
+        }
+        return ["--status", selectedStatuses.sorted().joined(separator: ",")]
+    }
+
+    private var priorityFilterArgs: [String] {
+        let all: Set<String> = ["0", "1", "2", "3", "4"]
+        if selectedPriorities.isEmpty || selectedPriorities == all { return [] }
+        if selectedPriorities.count == 1 {
+            return ["--priority", selectedPriorities.first!]
+        }
+        // Use --priority-min/--priority-max; for non-contiguous selections this is
+        // an approximation (bd list does not support multi-value --priority).
+        let sorted = selectedPriorities.compactMap { Int($0) }.sorted()
+        return ["--priority-min", String(sorted.first!), "--priority-max", String(sorted.last!)]
+    }
+
+    private var typeFilterArgs: [String] {
+        let allMenuTypes: Set<String> = ["bug", "feature", "task", "epic", "chore", "decision"]
+        if selectedTypes.isEmpty || selectedTypes == allMenuTypes { return [] }
+        // --type does not support comma-separated; use --exclude-type (which does) with
+        // the inverse set of the user's selection.
+        let excluded = allMenuTypes.subtracting(selectedTypes)
+        return ["--exclude-type", excluded.sorted().joined(separator: ",")]
+    }
+
+    private var titleFilterArgs: [String] {
+        let q = titleSearch.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return [] }
+        return [searchScope.flag, q]
+    }
+
+    private var allFilterArgs: [String] {
+        statusFilterArgs + priorityFilterArgs + typeFilterArgs + titleFilterArgs
     }
 
     // Copy details toolbar feedback
@@ -51,6 +112,8 @@ struct IssueListView: View {
         HStack(spacing: 0) {
             VStack(spacing: 0) {
                 listToolbar
+                Divider()
+                filterBar
                 Divider()
                 listContent
             }
@@ -87,6 +150,16 @@ struct IssueListView: View {
         .task { await loadIssues() }
         .onChange(of: workingDirectory) { newDir in Task { await loadIssues(dir: newDir) } }
         .onChange(of: refreshTrigger) { _ in Task { await loadIssues() } }
+        .onChange(of: selectedStatuses)  { _ in Task { await loadIssues() } }
+        .onChange(of: searchScope)        { _ in Task { await loadIssues() } }
+        .onChange(of: selectedPriorities) { _ in Task { await loadIssues() } }
+        .onChange(of: selectedTypes)      { _ in Task { await loadIssues() } }
+        .onChange(of: titleSearch) { _ in
+            searchDebounceTask?.cancel()
+            let work = DispatchWorkItem { Task { await self.loadIssues() } }
+            searchDebounceTask = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+        }
         .onChange(of: selectedIDs) { newSelection in
             // Persist selection to SceneStorage
             selectedIDsJSON = encodeIDSet(newSelection)
@@ -192,6 +265,7 @@ struct IssueListView: View {
             }
             .listStyle(.plain)
             .focused($listFocused)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -211,18 +285,6 @@ struct IssueListView: View {
                         .background(Color.accentColor, in: Capsule())
                 }
                 Spacer()
-                Button {
-                    Task { await loadPanelDetails() }
-                } label: {
-                    if panelLoading {
-                        ProgressView().scaleEffect(0.7)
-                    } else {
-                        Label("Refresh", systemImage: "arrow.clockwise")
-                    }
-                }
-                .buttonStyle(.bordered).controlSize(.small)
-                .disabled(panelLoading || selectedIDs.isEmpty)
-                .help("Refresh detail panel")
 
                 if !panelContents.isEmpty && !panelLoading {
                     Button {
@@ -235,6 +297,18 @@ struct IssueListView: View {
                     .buttonStyle(.bordered).controlSize(.small)
                     .help("Copy loaded details as Markdown")
                 }
+                Button {
+                    Task { await loadPanelDetails() }
+                } label: {
+                    if panelLoading {
+                        ProgressView().scaleEffect(0.7)
+                    } else {
+                        Label("Refresh", systemImage: "arrow.clockwise")
+                    }
+                }
+                .buttonStyle(.bordered).controlSize(.small)
+                .disabled(panelLoading || selectedIDs.isEmpty)
+                .help("Refresh detail panel")
             }
             .padding(.horizontal).padding(.vertical, 8)
             .background(.bar)
@@ -282,6 +356,57 @@ struct IssueListView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Filter Bar
+
+    private var filterBar: some View {
+        HStack(spacing: 8) {
+            // N.B. explicit frame height prevents Menu(borderlessButton) from expanding the bar
+            StatusFilterMenu(selectedStatuses: $selectedStatuses)
+            PriorityFilterMenu(selectedPriorities: $selectedPriorities)
+            TypeFilterMenu(selectedTypes: $selectedTypes)
+            Spacer()
+            HStack(spacing: 0) {
+                // Leading separator to visually separate from left-side filter menus
+                Rectangle().frame(width: 0.5).foregroundStyle(.separator)
+
+                // Scope picker — label is plain text; borderlessButton adds its own chevron
+                Menu {
+                    ForEach(SearchScope.allCases, id: \.self) { scope in
+                        Button(scope.rawValue) { searchScope = scope }
+                    }
+                } label: {
+                    Text(searchScope.rawValue).font(.subheadline)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .padding(.horizontal, 8)
+                .frame(maxHeight: .infinity)
+
+                // Mid separator between scope and search field
+                Rectangle().frame(width: 0.5).foregroundStyle(.separator)
+
+                // Search field + clear button
+                HStack(spacing: 4) {
+                    TextField("Search\u{2026}", text: $titleSearch)
+                        .textFieldStyle(.plain)
+                        .font(.subheadline)
+                    if !titleSearch.isEmpty {
+                        Button { titleSearch = "" } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .frame(width: 180, alignment: .leading)
+            }
+            .frame(maxHeight: .infinity)
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 34)
+        .background(.bar)
     }
 
     // MARK: - Helpers
@@ -405,7 +530,7 @@ struct IssueListView: View {
         let dir = explicitDir ?? workingDirectory
         guard !dir.isEmpty else { return }
         isLoading = true; loadingCount = 0; errorMessage = nil
-        let (progressStream, bgTask) = BeadsRunner.listWithProgress(workingDirectory: dir)
+        let (progressStream, bgTask) = BeadsRunner.listWithProgress(workingDirectory: dir, extraArgs: allFilterArgs)
         for await count in progressStream { loadingCount = count }
         do {
             issues = try await bgTask.value
@@ -524,6 +649,166 @@ struct IssueListView: View {
         }
         walk(list)
         return ids
+    }
+}
+
+// MARK: - Status Filter Menu
+
+private struct StatusFilterMenu: View {
+    @Binding var selectedStatuses: Set<String>
+
+    private let statuses: [(value: String, display: String)] = [
+        ("open",        "Open"),
+        ("in_progress", "In Progress"),
+        ("blocked",     "Blocked"),
+        ("deferred",    "Deferred"),
+        ("closed",      "Closed"),
+    ]
+    private var allSet: Set<String> { Set(statuses.map(\.value)) }
+
+    private var label: String {
+        if selectedStatuses.isEmpty || selectedStatuses == allSet { return "All Statuses" }
+        if selectedStatuses.count == 1,
+           let name = statuses.first(where: { selectedStatuses.contains($0.value) })?.display {
+            return name
+        }
+        return "\(selectedStatuses.count) Statuses"
+    }
+
+    var body: some View {
+        Menu {
+            Toggle(isOn: Binding(
+                get: { selectedStatuses.isEmpty || selectedStatuses == allSet },
+                set: { on in if on { selectedStatuses = allSet } }
+            )) {
+                Text("All Statuses")
+            }
+            Divider()
+            ForEach(statuses, id: \.value) { item in
+                Toggle(isOn: Binding(
+                    get: { selectedStatuses.contains(item.value) },
+                    set: { on in
+                        if on { selectedStatuses.insert(item.value) }
+                        else  { selectedStatuses.remove(item.value) }
+                    }
+                )) {
+                    Text(item.display)
+                }
+            }
+        } label: {
+            Label(label, systemImage: "line.3.horizontal.decrease.circle")
+                .font(.subheadline)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .controlSize(.regular)
+    }
+}
+
+// MARK: - Priority Filter Menu
+
+private struct PriorityFilterMenu: View {
+    @Binding var selectedPriorities: Set<String>
+
+    private let priorities: [(value: String, display: String)] = [
+        ("0", "P0 \u{2014} Critical"),
+        ("1", "P1 \u{2014} High"),
+        ("2", "P2 \u{2014} Normal"),
+        ("3", "P3 \u{2014} Low"),
+        ("4", "P4 \u{2014} Trivial"),
+    ]
+    private var allSet: Set<String> { Set(priorities.map(\.value)) }
+
+    private var label: String {
+        if selectedPriorities.isEmpty || selectedPriorities == allSet { return "Priority" }
+        if selectedPriorities.count == 1 { return "P" + selectedPriorities.first! }
+        let sorted = selectedPriorities.compactMap { Int($0) }.sorted()
+        let isContiguous = !sorted.isEmpty && sorted.last! - sorted.first! + 1 == sorted.count
+        if isContiguous { return "P\(sorted.first!)\u{2013}P\(sorted.last!)" }
+        return "\(selectedPriorities.count) Priorities"
+    }
+
+    var body: some View {
+        Menu {
+            Toggle(isOn: Binding(
+                get: { selectedPriorities.isEmpty || selectedPriorities == allSet },
+                set: { on in if on { selectedPriorities = allSet } }
+            )) {
+                Text("All Priorities")
+            }
+            Divider()
+            ForEach(priorities, id: \.value) { item in
+                Toggle(isOn: Binding(
+                    get: { selectedPriorities.contains(item.value) },
+                    set: { on in
+                        if on { selectedPriorities.insert(item.value) }
+                        else  { selectedPriorities.remove(item.value) }
+                    }
+                )) {
+                    Text(item.display)
+                }
+            }
+        } label: {
+            Label(label, systemImage: "flag")
+                .font(.subheadline)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .controlSize(.regular)
+    }
+}
+
+// MARK: - Type Filter Menu
+
+private struct TypeFilterMenu: View {
+    @Binding var selectedTypes: Set<String>
+
+    private let types: [(value: String, display: String)] = [
+        ("bug",      "Bug"),
+        ("feature",  "Feature"),
+        ("task",     "Task"),
+        ("epic",     "Epic"),
+        ("chore",    "Chore"),
+        ("decision", "Decision"),
+    ]
+    private var allSet: Set<String> { Set(types.map(\.value)) }
+
+    private var label: String {
+        if selectedTypes.isEmpty || selectedTypes == allSet { return "Type" }
+        if selectedTypes.count == 1,
+           let name = types.first(where: { selectedTypes.contains($0.value) })?.display {
+            return name
+        }
+        return "\(selectedTypes.count) Types"
+    }
+
+    var body: some View {
+        Menu {
+            Toggle(isOn: Binding(
+                get: { selectedTypes.isEmpty || selectedTypes == allSet },
+                set: { on in if on { selectedTypes = allSet } }
+            )) {
+                Text("All Types")
+            }
+            Divider()
+            ForEach(types, id: \.value) { item in
+                Toggle(isOn: Binding(
+                    get: { selectedTypes.contains(item.value) },
+                    set: { on in
+                        if on { selectedTypes.insert(item.value) }
+                        else  { selectedTypes.remove(item.value) }
+                    }
+                )) {
+                    Text(item.display)
+                }
+            }
+        } label: {
+            Label(label, systemImage: "tag")
+                .font(.subheadline)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .controlSize(.regular)
     }
 }
 

@@ -46,21 +46,21 @@ enum BeadsRunner {
 
     /// Returns a progress stream (running issue count) and a background task resolving to the full issue tree.
     /// Consume the stream on the main actor to update UI, then await the task for the final result.
-    static func listWithProgress(workingDirectory: String) -> (AsyncStream<Int>, Task<[BeadsIssue], Error>) {
+    static func listWithProgress(workingDirectory: String, extraArgs: [String] = []) -> (AsyncStream<Int>, Task<[BeadsIssue], Error>) {
         let (stream, continuation) = AsyncStream<Int>.makeStream()
         let bgTask = Task.detached(priority: .userInitiated) {
             defer { continuation.finish() }
-            return try BeadsRunner.listInternal(workingDirectory: workingDirectory) { count in
+            return try BeadsRunner.listInternal(workingDirectory: workingDirectory, extraArgs: extraArgs) { count in
                 continuation.yield(count)
             }
         }
         return (stream, bgTask)
     }
 
-    private static func listInternal(workingDirectory: String, onProgress: @escaping (Int) -> Void) throws -> [BeadsIssue] {
+    private static func listInternal(workingDirectory: String, extraArgs: [String] = [], onProgress: @escaping (Int) -> Void) throws -> [BeadsIssue] {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        p.arguments = ["bd", "list", "--json", "--limit", "0"]
+        p.arguments = ["bd", "list"] + extraArgs + ["--json", "--limit", "0"]
         p.environment = pathHelperEnvironment()
         if !workingDirectory.isEmpty { p.currentDirectoryURL = URL(fileURLWithPath: workingDirectory) }
         let out = Pipe(), err = Pipe()
