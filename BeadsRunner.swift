@@ -232,6 +232,26 @@ enum BeadsRunner {
         }
     }
 
+    // MARK: Set Due Date
+
+    static func setDue(id: String, due: String, workingDirectory: String) throws {
+        let (stdout, stderr, exitCode) = try run(["bd", "update", id, "--due", due], in: workingDirectory)
+        if exitCode != 0 {
+            let msg = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            throw BeadsError.commandFailed(msg.isEmpty ? stdout : msg)
+        }
+    }
+
+    // MARK: Set Defer Date
+
+    static func setDefer(id: String, deferUntil: String, workingDirectory: String) throws {
+        let (stdout, stderr, exitCode) = try run(["bd", "update", id, "--defer", deferUntil], in: workingDirectory)
+        if exitCode != 0 {
+            let msg = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            throw BeadsError.commandFailed(msg.isEmpty ? stdout : msg)
+        }
+    }
+
     // MARK: Set Status
 
     static func setStatus(id: String, status: String, workingDirectory: String) throws {
@@ -254,11 +274,17 @@ enum BeadsRunner {
             let parent: String?
             let dependencyCount: Int?
             let dependentCount:  Int?
+            let updatedAt: String
+            let due: String?
+            let deferUntil: String?
             enum CodingKeys: String, CodingKey {
                 case id, title, status, priority, parent
                 case issueType = "issue_type"
                 case dependencyCount = "dependency_count"
                 case dependentCount  = "dependent_count"
+                case updatedAt = "updated_at"
+                case due = "due_at"
+                case deferUntil = "defer_until"
             }
         }
 
@@ -273,6 +299,9 @@ enum BeadsRunner {
                                        parentID: r.parent,
                                        dependencyCount: r.dependencyCount ?? 0,
                                        dependentCount:  r.dependentCount  ?? 0,
+                                       updatedAt: r.updatedAt,
+                                       due: r.due,
+                                       deferUntil: r.deferUntil,
                                        children: nil)
             if let p = r.parent { childIndex[p, default: []].append(r.id) }
         }

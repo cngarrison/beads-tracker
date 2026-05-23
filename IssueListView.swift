@@ -5,6 +5,27 @@ import SwiftUI
 import AppKit
 import WebKit
 
+// MARK: - Date Parsing Helper
+
+fileprivate func dueColor(from isoString: String) -> Color {
+    guard let date = parseISO8601Date(isoString) else { return .primary }
+    let interval = date.timeIntervalSinceNow
+    if interval < 0 { return .red }           // overdue
+    if interval < 172_800 { return .orange }  // <48h
+    return .primary
+}
+
+fileprivate func parseISO8601Date(_ isoString: String) -> Date? {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    var date = formatter.date(from: isoString)
+    if date == nil {
+        formatter.formatOptions = [.withInternetDateTime]
+        date = formatter.date(from: isoString)
+    }
+    return date
+}
+
 // MARK: - Search Scope
 
 enum SearchScope: String, CaseIterable {
@@ -924,6 +945,27 @@ private struct TypeFilterMenu: View {
 struct IssueDetailCard: View {
     let detail: BeadsIssueDetail
     @State private var isHoveringID = false
+    
+    private func dueColor(from isoString: String) -> Color {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        var date = formatter.date(from: isoString)
+        if date == nil {
+            formatter.formatOptions = [.withInternetDateTime]
+            date = formatter.date(from: isoString)
+        }
+        guard let dueDate = date else { return .primary }
+        
+        let now = Date()
+        let interval = dueDate.timeIntervalSince(now)
+        
+        if interval < 0 {
+            return .red  // Overdue
+        } else if interval < 172800 {  // 48 hours
+            return .orange  // Due soon
+        }
+        return .primary  // Normal
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -980,6 +1022,56 @@ struct IssueDetailCard: View {
                         }
                         .foregroundStyle(.secondary)
                     }
+                    Spacer()
+                }
+            }
+            
+            // Date metadata section
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 16) {
+                    if let created = detail.createdAt {
+                        HStack(spacing: 4) {
+                            Text("Created:").foregroundStyle(.secondary)
+                            Text(absoluteDate(from: created))
+                        }
+                        .font(.caption)
+                    }
+                    
+                    HStack(spacing: 4) {
+                        Text("Updated:").foregroundStyle(.secondary)
+                        Text(relativeAge(from: detail.updatedAt))
+                    }
+                    .font(.caption)
+                    
+                    Spacer()
+                }
+                
+                HStack(spacing: 16) {
+                    if let started = detail.startedAt {
+                        HStack(spacing: 4) {
+                            Text("Started:").foregroundStyle(.secondary)
+                            Text(absoluteDate(from: started))
+                        }
+                        .font(.caption)
+                    }
+                    
+                    if let due = detail.due {
+                        HStack(spacing: 4) {
+                            Text("Due:").foregroundStyle(.secondary)
+                            Text(absoluteDate(from: due))
+                                .foregroundStyle(dueColor(from: due))
+                        }
+                        .font(.caption)
+                    }
+                    
+                    if let deferUntil = detail.deferUntil {
+                        HStack(spacing: 4) {
+                            Text("Deferred:").foregroundStyle(.secondary)
+                            Text(absoluteDate(from: deferUntil))
+                        }
+                        .font(.caption)
+                    }
+                    
                     Spacer()
                 }
             }
@@ -1404,6 +1496,20 @@ struct IssueRow: View {
             if copiedID == issue.id {
                 Text("Copied!").font(.caption).foregroundStyle(.green)
             }
+
+            // Due badge — only shown when a due date is set
+            if let due = issue.due {
+                Text(shortDate(from: due))
+                    .font(.caption2).fontWeight(.medium)
+                    .foregroundStyle(dueColor(from: due))
+                    .padding(.horizontal, 5).padding(.vertical, 2)
+                    .background(dueColor(from: due).opacity(0.15), in: Capsule())
+            }
+
+            // Age label (relative time since last update)
+            Text(relativeAge(from: issue.updatedAt))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { onEdit() }
@@ -1558,6 +1664,10 @@ struct IssueEditSheet: View {
     @State private var newDepType: String = "blocks"
     @State private var isAddingDep = false
     @State private var depError: String? = nil
+    @State private var dueDate: Date? = nil
+    @State private var deferDate: Date? = nil
+    @State private var originalDue: String? = nil
+    @State private var originalDefer: String? = nil
 
     private var canSave: Bool {
         !fields.title.trimmingCharacters(in: .whitespaces).isEmpty && !isSaving
@@ -1594,6 +1704,68 @@ struct IssueEditSheet: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         IssueFormContent(fields: $fields, showDependencies: false).padding()
+
+                        Divider()
+                        
+                        // Date pickers section
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Dates").font(.subheadline).fontWeight(.medium)
+                            
+                            // Due date picker
+                            HStack {
+                                Text("Due").frame(width: 100, alignment: .trailing)
+                                if let due = dueDate {
+                                    DatePicker("", selection: Binding(
+                                        get: { due },
+                                        set: { dueDate = $0 }
+                                    ), displayedComponents: .date)
+                                    .labelsHidden()
+                                    Button {
+                                        dueDate = nil
+                                    } label: {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("Clear due date")
+                                } else {
+                                    Button("Set due date") {
+                                        dueDate = Date()
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                }
+                                Spacer()
+                            }
+                            
+                            // Defer date picker
+                            HStack {
+                                Text("Defer").frame(width: 100, alignment: .trailing)
+                                if let defer_ = deferDate {
+                                    DatePicker("", selection: Binding(
+                                        get: { defer_ },
+                                        set: { deferDate = $0 }
+                                    ), displayedComponents: .date)
+                                    .labelsHidden()
+                                    Button {
+                                        deferDate = nil
+                                    } label: {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("Clear defer date")
+                                } else {
+                                    Button("Set defer date") {
+                                        deferDate = Date()
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                }
+                                Spacer()
+                            }
+                        }
+                        .padding(.horizontal).padding(.vertical, 8)
 
                         Divider()
                         VStack(alignment: .leading, spacing: 8) {
@@ -1751,6 +1923,16 @@ struct IssueEditSheet: View {
             comments = detail.comments ?? []
             dependencies = detail.dependencies ?? []
             dependents   = detail.dependents   ?? []
+            
+            // Parse date strings into Date objects for pickers
+            originalDue = detail.due
+            originalDefer = detail.deferUntil
+            if let dueStr = detail.due {
+                dueDate = parseISO8601Date(dueStr)
+            }
+            if let deferStr = detail.deferUntil {
+                deferDate = parseISO8601Date(deferStr)
+            }
         } catch {
             self.error = error.localizedDescription
         }
@@ -1829,9 +2011,39 @@ struct IssueEditSheet: View {
         let origSnap = originalFields
         let dir      = workingDirectory
         let id       = issue.id
+        let snapDue = dueDate
+        let snapDefer = deferDate
+        let origDue = originalDue
+        let origDefer = originalDefer
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 try BeadsRunner.update(id: id, fields: snap, original: origSnap, workingDirectory: dir)
+                
+                // Handle due date changes
+                let dueDateFormatter = ISO8601DateFormatter()
+                dueDateFormatter.formatOptions = [.withInternetDateTime]
+                
+                if let newDue = snapDue {
+                    let dueStr = dueDateFormatter.string(from: newDue)
+                    if origDue != dueStr {
+                        try BeadsRunner.setDue(id: id, due: dueStr, workingDirectory: dir)
+                    }
+                } else if origDue != nil {
+                    // Clear due date if it was set but now is nil
+                    try BeadsRunner.setDue(id: id, due: "", workingDirectory: dir)
+                }
+                
+                // Handle defer date changes
+                if let newDefer = snapDefer {
+                    let deferStr = dueDateFormatter.string(from: newDefer)
+                    if origDefer != deferStr {
+                        try BeadsRunner.setDefer(id: id, deferUntil: deferStr, workingDirectory: dir)
+                    }
+                } else if origDefer != nil {
+                    // Clear defer date if it was set but now is nil
+                    try BeadsRunner.setDefer(id: id, deferUntil: "", workingDirectory: dir)
+                }
+                
                 DispatchQueue.main.async {
                     isSaving = false
                     onSaved()

@@ -4,6 +4,78 @@
 import SwiftUI
 import AppKit
 
+// MARK: - Date Helpers
+
+/// Convert an ISO8601 date string to a human-readable relative time (e.g., "2h ago", "3d ago").
+func relativeAge(from isoString: String) -> String {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    
+    var date: Date?
+    // Try with fractional seconds first
+    date = formatter.date(from: isoString)
+    
+    // Fallback to standard format without fractional seconds
+    if date == nil {
+        formatter.formatOptions = [.withInternetDateTime]
+        date = formatter.date(from: isoString)
+    }
+    
+    guard let date = date else { return isoString }
+    
+    let now = Date()
+    let interval = now.timeIntervalSince(date)
+    
+    // Future dates
+    if interval < 0 {
+        let futureInterval = -interval
+        if futureInterval < 60 { return "in <1m" }
+        if futureInterval < 3600 { return "in \(Int(futureInterval / 60))m" }
+        if futureInterval < 86400 { return "in \(Int(futureInterval / 3600))h" }
+        if futureInterval < 2592000 { return "in \(Int(futureInterval / 86400))d" }
+        if futureInterval < 31536000 { return "in \(Int(futureInterval / 2592000))mo" }
+        return "in \(Int(futureInterval / 31536000))y"
+    }
+    
+    // Past dates
+    if interval < 60 { return "<1m ago" }
+    if interval < 3600 { return "\(Int(interval / 60))m ago" }
+    if interval < 86400 { return "\(Int(interval / 3600))h ago" }
+    if interval < 2592000 { return "\(Int(interval / 86400))d ago" }
+    if interval < 31536000 { return "\(Int(interval / 2592000))mo ago" }
+    return "\(Int(interval / 31536000))y ago"
+}
+
+/// Format an ISO8601 date string as an absolute date (e.g., "23 May 2026").
+/// Short date for compact badges, e.g. "30 May" or "2 Jun 2025"
+func shortDate(from isoString: String) -> String {
+    guard let date = ISO8601DateFormatter().date(from: isoString) else { return isoString }
+    let fmt = DateFormatter()
+    let cal = Calendar.current
+    fmt.dateFormat = cal.isDate(date, equalTo: Date(), toGranularity: .year) ? "d MMM" : "d MMM yyyy"
+    return fmt.string(from: date)
+}
+
+func absoluteDate(from isoString: String) -> String {
+    let isoFormatter = ISO8601DateFormatter()
+    isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    
+    var date: Date?
+    date = isoFormatter.date(from: isoString)
+    
+    if date == nil {
+        isoFormatter.formatOptions = [.withInternetDateTime]
+        date = isoFormatter.date(from: isoString)
+    }
+    
+    guard let date = date else { return isoString }
+    
+    let formatter = DateFormatter()
+    formatter.dateStyle = .medium
+    formatter.timeStyle = .none
+    return formatter.string(from: date)
+}
+
 // MARK: - Domain Enums
 
 enum IssueType: String, CaseIterable, Identifiable, Codable {
@@ -47,6 +119,9 @@ struct BeadsIssue: Identifiable {
     let parentID: String?
     let dependencyCount: Int      // issues this one depends on
     let dependentCount:  Int      // issues depending on this one
+    let updatedAt: String         // ISO8601 timestamp for age display
+    let due: String?              // ISO8601 due date, if set
+    let deferUntil: String?       // ISO8601 defer-until date, if set
     var children: [BeadsIssue]?   // nil = leaf node
 
     var statusSymbol: String {
@@ -91,12 +166,22 @@ struct BeadsIssueDetail: Decodable {
     let dependents:         [BeadsDependency]?  // downstream: children (parent-child) + issues blocked by this
     let epicTotalChildren:  Int?
     let epicClosedChildren: Int?
+    let createdAt: String?
+    let updatedAt: String
+    let startedAt: String?
+    let due: String?
+    let deferUntil: String?
     enum CodingKeys: String, CodingKey {
         case id, title, description, design, status, owner, assignee, labels, notes, comments, dependencies, dependents
         case priority, issueType = "issue_type"
         case acceptanceCriteria  = "acceptance_criteria"
         case epicTotalChildren   = "epic_total_children"
         case epicClosedChildren  = "epic_closed_children"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+        case startedAt = "started_at"
+        case due = "due_at"
+        case deferUntil = "defer_until"
     }
 }
 
