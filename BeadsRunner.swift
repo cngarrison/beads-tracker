@@ -232,6 +232,16 @@ enum BeadsRunner {
         }
     }
 
+    // MARK: Set Status
+
+    static func setStatus(id: String, status: String, workingDirectory: String) throws {
+        let (stdout, stderr, exitCode) = try run(["bd", "update", id, "--status", status], in: workingDirectory)
+        if exitCode != 0 {
+            let msg = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            throw BeadsError.commandFailed(msg.isEmpty ? stdout : msg)
+        }
+    }
+
     // MARK: Parse (JSON → tree)
 
     private static func buildTree(from json: String) throws -> [BeadsIssue] {

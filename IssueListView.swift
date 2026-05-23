@@ -101,6 +101,8 @@ struct IssueListView: View {
 
     // Detail panel
     @State private var showDetailPanel = true
+    @State private var isChangingStatus = false
+    @State private var showStatusChanged = false
     @State private var panelContents: [BeadsIssueDetail] = []
     @State private var panelLoading = false
     @State private var panelLoadingProgress: Int = 0
@@ -208,7 +210,7 @@ struct IssueListView: View {
             Button {
                 Task { await copyDetailsAsMarkdown(ids: Array(selectedIDs)) }
             } label: {
-                Label("Copy Details", systemImage: "doc.on.clipboard")
+                Label("Copy Issue(s)", systemImage: "doc.on.clipboard")
             }
             .buttonStyle(.bordered).controlSize(.small)
             .disabled(selectedIDs.isEmpty || isCopyingDetails)
@@ -287,6 +289,66 @@ struct IssueListView: View {
                         .background(Color.accentColor, in: Capsule())
                 }
                 Spacer()
+
+                // Status change feedback
+                if isChangingStatus {
+                    ProgressView().scaleEffect(0.7).padding(.trailing, 2)
+                } else if showStatusChanged {
+                    Text("✓").font(.caption).foregroundStyle(.green)
+                }
+
+                // Status menu (single selection only)
+                if selectedIDs.count == 1 {
+                    let currentStatus = panelContents.first?.status ?? "open"
+                    Menu {
+                        Button {
+                            Task { await changeStatus(id: Array(selectedIDs)[0], newStatus: "open") }
+                        } label: {
+                            HStack {
+                                Text("Open")
+                                if currentStatus == "open" { Spacer(); Image(systemName: "checkmark") }
+                            }
+                        }
+                        Button {
+                            Task { await changeStatus(id: Array(selectedIDs)[0], newStatus: "in_progress") }
+                        } label: {
+                            HStack {
+                                Text("In Progress")
+                                if currentStatus == "in_progress" { Spacer(); Image(systemName: "checkmark") }
+                            }
+                        }
+                        Button {
+                            Task { await changeStatus(id: Array(selectedIDs)[0], newStatus: "blocked") }
+                        } label: {
+                            HStack {
+                                Text("Blocked")
+                                if currentStatus == "blocked" { Spacer(); Image(systemName: "checkmark") }
+                            }
+                        }
+                        Button {
+                            Task { await changeStatus(id: Array(selectedIDs)[0], newStatus: "deferred") }
+                        } label: {
+                            HStack {
+                                Text("Deferred")
+                                if currentStatus == "deferred" { Spacer(); Image(systemName: "checkmark") }
+                            }
+                        }
+                        Button {
+                            Task { await changeStatus(id: Array(selectedIDs)[0], newStatus: "closed") }
+                        } label: {
+                            HStack {
+                                Text("Closed")
+                                if currentStatus == "closed" { Spacer(); Image(systemName: "checkmark") }
+                            }
+                        }
+                    } label: {
+                        Label("Status", systemImage: "circle.fill")
+                    }
+                    .menuStyle(.borderlessButton).controlSize(.small)
+                    .fixedSize()
+                    .disabled(isChangingStatus)
+                    .help("Change issue status")
+                }
 
                 if !panelContents.isEmpty && !panelLoading {
                     Button {
@@ -525,6 +587,36 @@ struct IssueListView: View {
             await loadIssues()
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func changeStatus(id: String, newStatus: String) async {
+        let dir = workingDirectory
+        isChangingStatus = true
+        showStatusChanged = false
+        do {
+            try await Task.detached(priority: .userInitiated) {
+                try BeadsRunner.setStatus(id: id, status: newStatus, workingDirectory: dir)
+            }.value
+            await loadPanelDetails()
+            await loadIssues()
+            showStatusChanged = true
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            showStatusChanged = false
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        isChangingStatus = false
+    }
+
+    private func statusDisplayName(_ status: String) -> String {
+        switch status {
+        case "open": return "Open"
+        case "in_progress": return "In Progress"
+        case "blocked": return "Blocked"
+        case "deferred": return "Deferred"
+        case "closed": return "Closed"
+        default: return status
         }
     }
 
