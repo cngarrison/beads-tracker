@@ -210,7 +210,7 @@ struct IssueListView: View {
             Button {
                 Task { await copyDetailsAsMarkdown(ids: Array(selectedIDs)) }
             } label: {
-                Label("Copy Issue(s)", systemImage: "doc.on.clipboard")
+                Label(selectedIDs.count == 1 ? "Copy Issue" : "Copy Issues", systemImage: "doc.on.clipboard")
             }
             .buttonStyle(.bordered).controlSize(.small)
             .disabled(selectedIDs.isEmpty || isCopyingDetails)
