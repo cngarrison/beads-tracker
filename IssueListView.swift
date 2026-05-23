@@ -297,6 +297,19 @@ struct IssueListView: View {
                     Text("✓").font(.caption).foregroundStyle(.green)
                 }
 
+                // Edit button (single selection only)
+                if selectedIDs.count == 1,
+                   let issueID = selectedIDs.first,
+                   let issue = flatIssues()[issueID] {
+                    Button {
+                        editIssue = issue
+                    } label: {
+                        Label("Edit", systemImage: "pencil")
+                    }
+                    .buttonStyle(.bordered).controlSize(.small)
+                    .help("Edit this issue")
+                }
+
                 // Status menu (single selection only)
                 if selectedIDs.count == 1 {
                     let currentStatus = panelContents.first?.status ?? "open"
@@ -344,7 +357,7 @@ struct IssueListView: View {
                     } label: {
                         Label("Status", systemImage: "circle.fill")
                     }
-                    .menuStyle(.borderlessButton).controlSize(.small)
+                    .controlSize(.small)
                     .fixedSize()
                     .disabled(isChangingStatus)
                     .help("Change issue status")
