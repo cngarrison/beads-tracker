@@ -132,7 +132,6 @@ struct ContentView: View {
                     Text(workingDirectory.isEmpty ? "No repository" :
                          URL(fileURLWithPath: workingDirectory).lastPathComponent)
                         .font(.subheadline)
-                    Image(systemName: "chevron.down").font(.caption2).foregroundStyle(.secondary)
                 }
             }
             .menuStyle(.borderlessButton)
