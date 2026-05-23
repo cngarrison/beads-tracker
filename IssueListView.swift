@@ -177,10 +177,12 @@ struct IssueListView: View {
         }
         .sheet(item: $editIssue) { issue in
             let w = NSApp.mainWindow?.frame.size.width ?? NSApp.keyWindow?.frame.size.width ?? 920
+            let h = NSApp.mainWindow?.frame.size.height ?? NSApp.keyWindow?.frame.size.height ?? 800
             IssueEditSheet(
                 issue: issue,
                 workingDirectory: workingDirectory,
                 preferredWidth: w,
+                preferredHeight: h,
                 onSaved: { Task { await loadIssues() } }
             )
         }
@@ -1432,6 +1434,7 @@ struct IssueEditSheet: View {
     let issue: BeadsIssue
     let workingDirectory: String
     let preferredWidth: CGFloat
+    let preferredHeight: CGFloat
     let onSaved: () -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -1627,8 +1630,7 @@ struct IssueEditSheet: View {
             .padding()
             .background(.bar)
         }
-        .frame(width: max(520, preferredWidth - 80))
-        .frame(minHeight: 540, maxHeight: .infinity)
+        .frame(width: max(520, preferredWidth - 80), height: max(540, preferredHeight - 100))
         .task { await loadDetail() }
     }
 
