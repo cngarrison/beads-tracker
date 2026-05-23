@@ -34,6 +34,7 @@ struct ContentView: View {
     @State private var showingCreateSheet = false
     @State private var issueRefreshTrigger = 0
     @State private var createSheetWidth: CGFloat = 600
+    @State private var createSheetHeight: CGFloat = 700
 
     private var windowTitle: String {
         workingDirectory.isEmpty
@@ -69,7 +70,7 @@ struct ContentView: View {
         .sheet(isPresented: $showingCreateSheet, onDismiss: {
             issueRefreshTrigger += 1
         }) {
-            CreateIssueView(workingDirectory: $workingDirectory, preferredWidth: createSheetWidth)
+            CreateIssueView(workingDirectory: $workingDirectory, preferredWidth: createSheetWidth, preferredHeight: createSheetHeight)
         }
     }
 
@@ -77,7 +78,8 @@ struct ContentView: View {
         HStack(spacing: 12) {
             // Left: project-scoped Create action
             Button {
-                createSheetWidth = (NSApp.keyWindow?.frame.size.width ?? 680) - 80
+                createSheetWidth  = (NSApp.keyWindow?.frame.size.width  ?? 680) - 80
+                createSheetHeight = (NSApp.keyWindow?.frame.size.height ?? 800) - 100
                 showingCreateSheet = true
             } label: {
                 Label("Create", systemImage: "plus.circle.fill")
@@ -90,7 +92,6 @@ struct ContentView: View {
             Spacer()
 
             // Right: cross-project controls
-            Image(systemName: "folder").foregroundStyle(.secondary)
             projectSelector
             Button("Choose\u{2026}") { pickWorkingDirectory() }
                 .buttonStyle(.bordered).controlSize(.small)
@@ -132,6 +133,7 @@ struct ContentView: View {
                     Text(workingDirectory.isEmpty ? "No repository" :
                          URL(fileURLWithPath: workingDirectory).lastPathComponent)
                         .font(.subheadline)
+					Image(systemName: "folder").foregroundStyle(.secondary)
                 }
             }
             .menuStyle(.borderlessButton)

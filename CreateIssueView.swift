@@ -225,6 +225,7 @@ struct IssueFormContent: View {
 struct CreateIssueView: View {
     @Binding var workingDirectory: String
     var preferredWidth: CGFloat = 600
+    var preferredHeight: CGFloat = 700
 
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var draftManager = FormDraftManager.shared
@@ -262,8 +263,7 @@ struct CreateIssueView: View {
             Divider()
             bottomBar
         }
-        .frame(width: max(520, preferredWidth))
-        .frame(minHeight: 560)
+        .frame(width: max(520, preferredWidth), height: max(560, preferredHeight - 100))
         .onAppear {
             if draftManager.hasDraft() {
                 showDraftBanner = true
