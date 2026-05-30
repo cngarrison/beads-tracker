@@ -105,6 +105,8 @@ enum BeadsRunner {
             var msg = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             if p.terminationStatus == 127 || msg.contains("command not found") {
                 msg = enrichCommandNotFound(msg)
+            } else {
+                msg = enrichSchemaError(msg)
             }
             throw BeadsError.commandFailed(msg.isEmpty ? stdout : msg)
         }
@@ -354,6 +356,32 @@ enum BeadsRunner {
         var seen = Set<String>()
         env["PATH"] = dirs.filter { seen.insert($0).inserted }.joined(separator: ":")
         return env
+    }
+
+    /// Wraps a raw error message with remediation steps when a Dolt schema mismatch is detected.
+    /// This happens when `bd` is updated but `bd migrate` hasn't been run in the project.
+    private static func enrichSchemaError(_ message: String) -> String {
+        let indicators = [
+            "could not be found in any table in scope",
+            "schema_version",
+            "is_blocked",
+            "depends_on_issue_id",
+        ]
+        guard indicators.contains(where: { message.contains($0) }) else { return message }
+        return """
+        \(message)
+
+        This looks like a database schema mismatch — 'bd' may have been updated
+        without migrating the local database schema.
+
+        To fix, run in Terminal:
+
+          bd migrate
+
+        If that doesn't resolve it, run the full diagnostic:
+
+          bd doctor --fix
+        """
     }
 
     /// Wraps a raw stderr/stdout message with setup instructions when `bd` cannot be found.
