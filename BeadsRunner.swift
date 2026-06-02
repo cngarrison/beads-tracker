@@ -127,7 +127,7 @@ enum BeadsRunner {
     // MARK: Show Detail (JSON — used by IssueEditSheet for pre-populating the form)
 
     static func showDetail(id: String, workingDirectory: String) throws -> BeadsIssueDetail {
-        let (stdout, stderr, status) = try run(["bd", "show", "--json", id], in: workingDirectory)
+        let (stdout, stderr, status) = try run(["bd", "show", "--json", "--include-comments", id], in: workingDirectory)
         if status != 0 {
             let msg = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             throw BeadsError.commandFailed(msg.isEmpty ? stdout : msg)
