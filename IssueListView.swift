@@ -1135,7 +1135,7 @@ struct IssueDetailCard: View {
                                 Spacer()
                                 Text(comment.createdAt).font(.caption2).foregroundStyle(.secondary)
                             }
-                            Text(comment.text).font(.callout).fixedSize(horizontal: false, vertical: true)
+                            MarkdownBody(markdown: comment.text)
                         }
                         .padding(8)
                         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
@@ -1178,6 +1178,15 @@ struct IssueDetailCard: View {
             .foregroundStyle(.white)
             .padding(.horizontal, 6).padding(.vertical, 2)
             .background(color, in: Capsule())
+    }
+}
+
+struct MarkdownBody: View {
+    let markdown: String
+    @State private var renderedHeight: CGFloat = 40
+    var body: some View {
+        MarkdownWebView(markdown: markdown, height: $renderedHeight)
+            .frame(height: renderedHeight)
     }
 }
 
@@ -1866,7 +1875,7 @@ struct IssueEditSheet: View {
                                             Spacer()
                                             Text(comment.createdAt).font(.caption).foregroundStyle(.secondary)
                                         }
-                                        Text(comment.text).font(.body).fixedSize(horizontal: false, vertical: true)
+                                        MarkdownBody(markdown: comment.text)
                                     }
                                     .padding(8)
                                     .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
