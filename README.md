@@ -1,6 +1,6 @@
 # Beads Tracker
 
-A native macOS app for creating and viewing issues in the [beads](https://steveyegge.github.io/beads/) (`bd`) issue tracking system — no CLI required.
+A native macOS app for creating and viewing issues in the [beads](https://github.com/gastownhall/beads/) (`bd`) issue tracking system — no CLI required.
 
 <img src="BeadsTracker.svg" alt="Beads Tracker icon" width="96"/>
 
