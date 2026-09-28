@@ -32,12 +32,16 @@ enum SearchScope: String, CaseIterable {
     case title       = "Title"
     case description = "Description"
     case notes       = "Notes"
+    case id          = "ID"
 
-    var flag: String {
+    /// bd list server-side filter flag. Returns nil for scopes that require
+    /// client-side filtering (`.id`) because `bd list` has no ID-substring flag.
+    var flag: String? {
         switch self {
         case .title:       return "--title-contains"
         case .description: return "--desc-contains"
         case .notes:       return "--notes-contains"
+        case .id: return nil
         }
     }
 }
@@ -111,8 +115,8 @@ struct IssueListView: View {
 
     private var titleFilterArgs: [String] {
         let q = titleSearch.trimmingCharacters(in: .whitespaces)
-        guard !q.isEmpty else { return [] }
-        return [searchScope.flag, q]
+        guard !q.isEmpty, let flag = searchScope.flag else { return [] }
+        return [flag, q]
     }
 
     private var allFilterArgs: [String] {
@@ -705,6 +709,14 @@ struct IssueListView: View {
         for await count in progressStream { loadingCount = count }
         do {
             issues = try await bgTask.value
+
+            // Client-side filtering for `.id` scope: bd list has no ID-substring flag
+            // (only exact --id), so match against issue.id here instead.
+            let searchQuery = titleSearch.trimmingCharacters(in: .whitespaces)
+            if !searchQuery.isEmpty, searchScope == .id {
+                issues = clientSideSearchFilter(issues, query: searchQuery, scope: searchScope)
+            }
+
             // Clean up persisted state: remove IDs that no longer exist
             let validIDs = allIssueIDs(in: issues)
             
@@ -808,6 +820,32 @@ struct IssueListView: View {
         return Set(array)
     }
     
+    /// Client-side substring search over the issue tree for the `.id` scope.
+    /// Case-insensitive substring match against `issue.id`. Preserves tree structure:
+    /// an ancestor is kept (with only its matching descendants) whenever it or any
+    /// descendant matches, so matches still display in context within the tree.
+    private func clientSideSearchFilter(_ list: [BeadsIssue], query: String, scope: SearchScope) -> [BeadsIssue] {
+        let q = query.lowercased()
+        func matches(_ issue: BeadsIssue) -> Bool {
+            if issue.id.lowercased().contains(q) { return true }
+            return false
+        }
+        func filter(_ items: [BeadsIssue]) -> [BeadsIssue] {
+            var result: [BeadsIssue] = []
+            for item in items {
+                let filteredChildren = item.children.map { filter($0) }
+                let selfMatches = matches(item)
+                if selfMatches || !(filteredChildren?.isEmpty ?? true) {
+                    var newItem = item
+                    newItem.children = (filteredChildren?.isEmpty ?? true) ? nil : filteredChildren
+                    result.append(newItem)
+                }
+            }
+            return result
+        }
+        return filter(list)
+    }
+
     private func allIssueIDs(in list: [BeadsIssue]) -> Set<String> {
         var ids = Set<String>()
         func walk(_ items: [BeadsIssue]) {
