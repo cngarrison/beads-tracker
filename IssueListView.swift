@@ -182,7 +182,12 @@ struct IssueListView: View {
             let dir = workingDirectory
             eventsWatcher.start(workingDirectory: dir) { Task { await loadIssues(dir: dir) } }
         }
-        .onDisappear { eventsWatcher.stop() }
+        // NOTE: intentionally no `.onDisappear { eventsWatcher.stop() }` here — SwiftUI can
+        // fire onDisappear on a transient view teardown/recreate during initial layout,
+        // which would kill the watcher before it ever starts (diagnosed root cause of the
+        // app always launching in "Manual" mode). Cleanup on true teardown is handled by
+        // BeadsEventsWatcher.deinit instead; workspace switching still tears down the
+        // previous process correctly via start()'s internal stop() call.
         .overlay(alignment: .top) {
             if let msg = eventsWatcher.toastMessage {
                 Text(msg)

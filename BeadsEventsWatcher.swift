@@ -34,6 +34,10 @@ private struct EventsTruncationError: Decodable {
 /// the view's lifetime.
 @MainActor
 final class BeadsEventsWatcher: ObservableObject {
+    /// Short unique ID for this instance, included in all log lines so multiple
+    /// windows/instances can be distinguished when their logs interleave in the
+    /// shared diagnostic log file.
+    private let instanceID = String(UUID().uuidString.prefix(8))
     /// True when the tail process for the current workspace is running and healthy.
     @Published private(set) var isLive: Bool = false
     /// Transient toast/banner text (nil = no toast currently shown).
@@ -41,6 +45,7 @@ final class BeadsEventsWatcher: ObservableObject {
 
     private var process: Process?
     private var stdoutBuffer = Data()
+    private var stderrBuffer = Data()
     private var workingDirectory: String = ""
     private var intentionallyStopped = false
     private var consecutiveFailures = 0
@@ -73,22 +78,65 @@ final class BeadsEventsWatcher: ObservableObject {
     /// Enable the events journal (fire-and-forget; failure is swallowed since the
     /// fallback path below handles it) and start tailing for the given workspace.
     func start(workingDirectory: String, onRefreshNeeded: @escaping () -> Void) {
-        stop()  // tear down any previous process (different workspace / restart)
+        // Check for an empty workspace path BEFORE tearing anything down. Diagnosed:
+        // a spurious re-invocation of start() with an empty workingDirectory (e.g. from
+        // a transient/stale value briefly reported by the caller) was previously calling
+        // stop() unconditionally first, silently killing an already-running healthy
+        // watcher, then bailing out via this guard without restarting it — root cause of
+        // the app always launching in "Manual" mode. Guarding first makes this immune to
+        // spurious empty-path calls regardless of their origin.
         guard !workingDirectory.isEmpty else { return }
+        stop()  // tear down any previous process (different workspace / restart)
         self.workingDirectory = workingDirectory
         self.onRefreshNeeded = onRefreshNeeded
         self.intentionallyStopped = false
         self.consecutiveFailures = 0
 
+        BTLog.log("[\(instanceID)] start() workingDirectory=\(workingDirectory)", category: "events")
         Task.detached(priority: .utility) {
-            try? BeadsRunner.enableEventsJournal(workingDirectory: workingDirectory)
+            // NOTE: `BeadsRunner.enableEventsJournal` uses a *blocking* stdout read
+            // (`readDataToEndOfFile()`) under the hood. If the underlying `bd` command
+            // triggers Dolt's `dolt.auto-start` to spin up a background/daemon server
+            // process that inherits our pipe's write-end file descriptor, that read can
+            // block forever (the pipe never sees EOF while the daemon keeps it open) —
+            // this exact scenario was diagnosed as the root cause of the watcher getting
+            // permanently stuck before ever reaching beginTailing(). Race it against a
+            // timeout so a hang here can never block real-time sync from starting.
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    do {
+                        try BeadsRunner.enableEventsJournal(workingDirectory: workingDirectory)
+                        BTLog.log("[\(self.instanceID)] enableEventsJournal OK", category: "events")
+                    } catch {
+                        BTLog.log("[\(self.instanceID)] enableEventsJournal FAILED: \(error)", category: "events")
+                    }
+                }
+                group.addTask {
+                    do {
+                        try await Task.sleep(nanoseconds: 5_000_000_000)
+                        BTLog.log("enableEventsJournal TIMED OUT after 5s — proceeding to tail anyway (see BTLog.swift doc comment / memory notes on pipe-deadlock root cause)", category: "events")
+                    } catch {
+                        // Cancelled because the real call finished first — not an actual timeout, don't log.
+                    }
+                }
+                await group.next()   // proceed as soon as either finishes
+                group.cancelAll()   // best-effort; the blocking call itself may still be stuck, but we stop waiting on it
+            }
             await self.beginTailing()
         }
     }
 
     /// Terminate the tail process (SIGTERM) and stop retrying. Call on workspace
-    /// change or view teardown to avoid leaking subprocesses.
+    /// change (start() calls this internally to tear down the previous workspace's
+    /// process) to avoid leaking subprocesses.
+    ///
+    /// NOT called from `.onDisappear` — SwiftUI can fire that on a transient view
+    /// teardown/recreate during initial layout, which would poison this persisted
+    /// @StateObject before its in-flight `start()` ever completes (diagnosed root
+    /// cause of the app always launching in "Manual" mode). True end-of-life cleanup
+    /// is instead handled by `deinit` below, which only fires on real deallocation.
     func stop() {
+        BTLog.log("[\(instanceID)] stop() called, workingDirectory=\(workingDirectory)", category: "events")
         intentionallyStopped = true
         debounceWorkItem?.cancel()
         debounceWorkItem = nil
@@ -98,10 +146,21 @@ final class BeadsEventsWatcher: ObservableObject {
         isLive = false
     }
 
+    deinit {
+        // Best-effort process cleanup on true deallocation only (see stop() doc comment
+        // above for why this isn't done via .onDisappear). Not actor-isolated; avoid
+        // touching @Published/MainActor-isolated state here.
+        process?.terminationHandler = nil
+        process?.terminate()
+    }
+
     // MARK: Tailing
 
     private func beginTailing() async {
-        guard !intentionallyStopped else { return }
+        guard !intentionallyStopped else {
+            BTLog.log("[\(instanceID)] beginTailing: bailing early, intentionallyStopped=true (stop() was already called)", category: "events")
+            return
+        }
         let dir = workingDirectory
         // TODO(shortcut): when there's no stored checkpoint yet for this workspace, we
         // start from --since 0 and simply coalesce the (potentially large) history-replay
@@ -111,6 +170,7 @@ final class BeadsEventsWatcher: ObservableObject {
         // already does one `bd list` on open today anyway, so the extra refresh is not
         // harmful, just occasionally redundant.
         let since = Self.checkpoint(for: dir) ?? 0
+        BTLog.log("[\(instanceID)] beginTailing dir=\(dir) since=\(since)", category: "events")
         spawnTailProcess(since: since)
     }
 
@@ -122,6 +182,7 @@ final class BeadsEventsWatcher: ObservableObject {
         p.arguments = ["bd", "events", "tail", "--since", String(since), "--follow"]
         p.environment = BeadsRunner.pathHelperEnvironment()
         if !dir.isEmpty { p.currentDirectoryURL = URL(fileURLWithPath: dir) }
+        BTLog.log("[\(instanceID)] spawnTailProcess args=\(p.arguments ?? []) dir=\(dir)", category: "events")
 
         let outPipe = Pipe()
         let errPipe = Pipe()
@@ -129,6 +190,7 @@ final class BeadsEventsWatcher: ObservableObject {
         p.standardError = errPipe
 
         stdoutBuffer = Data()
+        stderrBuffer = Data()
 
         // Stream stdout incrementally (unlike other BeadsRunner calls which wait for
         // full completion) since --follow never terminates on its own.
@@ -139,10 +201,13 @@ final class BeadsEventsWatcher: ObservableObject {
                 self?.consumeChunk(chunk)
             }
         }
-        // Drain stderr so the pipe buffer never blocks the process; content is not
-        // otherwise inspected (truncation is detected via stdout JSON error lines).
-        errPipe.fileHandleForReading.readabilityHandler = { handle in
-            _ = handle.availableData
+        // Accumulate stderr (previously drained/discarded) so we can log it if the
+        // process exits unexpectedly — this is our main diagnostic signal for spawn
+        // failures that aren't visible any other way (see BTLog.swift doc comment).
+        errPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let chunk = handle.availableData
+            guard !chunk.isEmpty else { return }
+            Task { @MainActor in self?.stderrBuffer.append(chunk) }
         }
 
         p.terminationHandler = { [weak self] proc in
@@ -156,10 +221,12 @@ final class BeadsEventsWatcher: ObservableObject {
             process = p
             isLive = true
             consecutiveFailures = 0
+            BTLog.log("spawnTailProcess OK pid=\(p.processIdentifier)", category: "events")
             maybeShowFirstEnableToast()
         } catch {
             process = nil
             isLive = false
+            BTLog.log("spawnTailProcess THREW: \(error)", category: "events")
             registerFailureAndMaybeRetry()
         }
     }
@@ -186,7 +253,10 @@ final class BeadsEventsWatcher: ObservableObject {
             return
         }
 
-        guard let record = try? JSONDecoder().decode(EventRecord.self, from: data) else { return }
+        guard let record = try? JSONDecoder().decode(EventRecord.self, from: data) else {
+            BTLog.log("handleLine: failed to decode as EventRecord or truncation error, raw line: \(line)", category: "events")
+            return
+        }
         Self.setCheckpoint(record.seq, for: workingDirectory)
         scheduleDebouncedRefresh()
     }
@@ -212,6 +282,8 @@ final class BeadsEventsWatcher: ObservableObject {
     }
 
     private func handleProcessTermination(status: Int32) {
+        let stderrText = String(data: stderrBuffer, encoding: .utf8) ?? "<undecodable>"
+        BTLog.log("process terminated status=\(status) intentionallyStopped=\(intentionallyStopped) stderr=\(stderrText.isEmpty ? "<empty>" : stderrText)", category: "events")
         guard !intentionallyStopped else { return }
         isLive = false
         registerFailureAndMaybeRetry()
@@ -219,8 +291,10 @@ final class BeadsEventsWatcher: ObservableObject {
 
     private func registerFailureAndMaybeRetry() {
         consecutiveFailures += 1
+        BTLog.log("registerFailureAndMaybeRetry consecutiveFailures=\(consecutiveFailures)/\(maxConsecutiveFailures)", category: "events")
         guard consecutiveFailures <= maxConsecutiveFailures else {
             // Give up for this workspace session — fall back to manual-refresh mode.
+            BTLog.log("giving up permanently for this session (workingDirectory=\(workingDirectory))", category: "events")
             intentionallyStopped = true
             return
         }
