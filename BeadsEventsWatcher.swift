@@ -196,9 +196,9 @@ final class BeadsEventsWatcher: ObservableObject {
         // full completion) since --follow never terminates on its own.
         outPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let chunk = handle.availableData
-            guard !chunk.isEmpty else { return }
+            guard !chunk.isEmpty, let self else { return }
             Task { @MainActor in
-                self?.consumeChunk(chunk)
+                self.consumeChunk(chunk)
             }
         }
         // Accumulate stderr (previously drained/discarded) so we can log it if the
@@ -206,13 +206,14 @@ final class BeadsEventsWatcher: ObservableObject {
         // failures that aren't visible any other way (see BTLog.swift doc comment).
         errPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let chunk = handle.availableData
-            guard !chunk.isEmpty else { return }
-            Task { @MainActor in self?.stderrBuffer.append(chunk) }
+            guard !chunk.isEmpty, let self else { return }
+            Task { @MainActor in self.stderrBuffer.append(chunk) }
         }
 
         p.terminationHandler = { [weak self] proc in
+            guard let self else { return }
             Task { @MainActor in
-                self?.handleProcessTermination(status: proc.terminationStatus)
+                self.handleProcessTermination(status: proc.terminationStatus)
             }
         }
 
