@@ -132,7 +132,8 @@ enum BeadsRunner {
             let msg = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             throw BeadsError.commandFailed(msg.isEmpty ? stdout : msg)
         }
-        let results = try JSONDecoder().decode([BeadsIssueDetail].self, from: Data(stdout.utf8))
+        let unwrapped = try unwrapJSONEnvelope(Data(stdout.utf8))
+        let results = try JSONDecoder().decode([BeadsIssueDetail].self, from: unwrapped)
         guard let first = results.first else {
             throw BeadsError.commandFailed("No detail returned for issue \(id)")
         }
@@ -277,6 +278,33 @@ enum BeadsRunner {
         }
     }
 
+    // MARK: - JSON Envelope Handling
+
+    /// Detects and unwraps the `BD_JSON_ENVELOPE=1` / bd v2.0 uniform JSON envelope format.
+    ///
+    /// Legacy `--json` output: object commands emit the payload directly at the top level
+    /// (e.g. `{"schema_version":1, ...fields}`), list/array commands emit a raw JSON array.
+    /// Envelope format wraps ALL commands uniformly as `{"schema_version":1,"data":<payload>}`
+    /// (optionally with a `pagination` key alongside `data` for truncated listings).
+    ///
+    /// Detection rule: presence of a top-level `data` key indicates envelope format (legacy
+    /// object-command output also has `schema_version` but never nests it under `data`, so
+    /// checking for `data` specifically — not `schema_version` — is the correct discriminator).
+    ///
+    /// Returns the unwrapped payload `Data` (contents of `.data` when enveloped, or the
+    /// original `data` unchanged when legacy) so downstream `Decodable` types can decode
+    /// it exactly as they do today for legacy format. Works whether the payload is an
+    /// object or an array.
+    static func unwrapJSONEnvelope(_ data: Data) throws -> Data {
+        // Only object-shaped top-level JSON can carry a "data" envelope key; a raw JSON
+        // array is unambiguously legacy list output already.
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let payload = obj["data"] else {
+            return data
+        }
+        return try JSONSerialization.data(withJSONObject: payload)
+    }
+
     // MARK: Parse (JSON → tree)
 
     private static func buildTree(from json: String) throws -> [BeadsIssue] {
@@ -303,7 +331,8 @@ enum BeadsRunner {
             }
         }
 
-        let raw = try JSONDecoder().decode([RawIssue].self, from: Data(json.utf8))
+        let unwrapped = try unwrapJSONEnvelope(Data(json.utf8))
+        let raw = try JSONDecoder().decode([RawIssue].self, from: unwrapped)
 
         // Build flat map and child index
         var nodeMap: [String: BeadsIssue] = [:]
@@ -368,6 +397,12 @@ enum BeadsRunner {
         // Deduplicate, preserving order.
         var seen = Set<String>()
         env["PATH"] = dirs.filter { seen.insert($0).inserted }.joined(separator: ":")
+
+        // Opt in to the bd v2.0 uniform JSON envelope format ahead of it becoming the
+        // default, so we catch any issues early. Safety net: unwrapJSONEnvelope() already
+        // transparently handles both legacy and enveloped output. Revert by removing this line.
+        env["BD_JSON_ENVELOPE"] = "1"
+
         return env
     }
 
