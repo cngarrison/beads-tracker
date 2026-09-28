@@ -264,6 +264,19 @@ enum BeadsRunner {
         }
     }
 
+    // MARK: Events Journal (real-time sync — see BeadsEventsWatcher)
+
+    /// Enables the workspace-local events journal (idempotent; safe to call every
+    /// time a workspace is opened). Callers should treat failure as non-fatal —
+    /// BeadsEventsWatcher falls back to manual-refresh mode when this fails.
+    static func enableEventsJournal(workingDirectory: String) throws {
+        let (stdout, stderr, status) = try run(["bd", "config", "set", "events-journal", "true"], in: workingDirectory)
+        if status != 0 {
+            let msg = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            throw BeadsError.commandFailed(msg.isEmpty ? stdout : msg)
+        }
+    }
+
     // MARK: Parse (JSON → tree)
 
     private static func buildTree(from json: String) throws -> [BeadsIssue] {
@@ -335,7 +348,7 @@ enum BeadsRunner {
 
     /// Builds a PATH that includes entries from /etc/paths and /etc/paths.d/*, replicating
     /// what path_helper does for login shells — without needing to spawn one.
-    private static func pathHelperEnvironment() -> [String: String] {
+    static func pathHelperEnvironment() -> [String: String] {
         var env = ProcessInfo.processInfo.environment
         var dirs: [String] = []
 

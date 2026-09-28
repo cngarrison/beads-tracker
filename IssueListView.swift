@@ -57,6 +57,9 @@ struct IssueListView: View {
     @State private var detailIssue:  BeadsIssue? = nil
     @State private var editIssue:    BeadsIssue? = nil
 
+    // Real-time sync via `bd events tail` (see BeadsEventsWatcher)
+    @StateObject private var eventsWatcher = BeadsEventsWatcher()
+
     // Persistent state (SceneStorage for per-window persistence across quit/reopen)
     @SceneStorage("expandedIDsJSON") private var expandedIDsJSON: String = "[]"
     @SceneStorage("selectedIDsJSON") private var selectedIDsJSON: String = "[]"
@@ -171,7 +174,27 @@ struct IssueListView: View {
             }
         }
         .task { await loadIssues() }
-        .onChange(of: workingDirectory) { newDir in Task { await loadIssues(dir: newDir) } }
+        .task {
+            let dir = workingDirectory
+            eventsWatcher.start(workingDirectory: dir) { Task { await loadIssues(dir: dir) } }
+        }
+        .onDisappear { eventsWatcher.stop() }
+        .overlay(alignment: .top) {
+            if let msg = eventsWatcher.toastMessage {
+                Text(msg)
+                    .font(.caption)
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .background(.thickMaterial, in: Capsule())
+                    .shadow(radius: 2)
+                    .padding(.top, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: eventsWatcher.toastMessage)
+        .onChange(of: workingDirectory) { newDir in
+            Task { await loadIssues(dir: newDir) }
+            eventsWatcher.start(workingDirectory: newDir) { Task { await loadIssues(dir: newDir) } }
+        }
         .onChange(of: refreshTrigger) { _ in Task { await loadIssues() } }
         .onChange(of: selectedStatuses)  { _ in Task { await loadIssues() } }
         .onChange(of: searchScope)        { _ in Task { await loadIssues() } }
@@ -219,6 +242,9 @@ struct IssueListView: View {
                 Text("\(issues.count) issue\(issues.count == 1 ? "" : "s")")
                     .foregroundStyle(.secondary).font(.subheadline)
             }
+
+            liveStatusIndicator
+
             Spacer()
 
             // Copy feedback
@@ -253,6 +279,23 @@ struct IssueListView: View {
         }
         .padding(.horizontal).padding(.vertical, 8)
         .background(.bar)
+    }
+
+    // MARK: - Live/Manual Status Indicator
+
+    private var liveStatusIndicator: some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(eventsWatcher.isLive ? Color.green : Color.gray)
+                .frame(width: 8, height: 8)
+            Text(eventsWatcher.isLive ? "Live" : "Manual")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.leading, 10)
+        .help(eventsWatcher.isLive
+              ? "Live updates active — the list refreshes automatically as changes occur"
+              : "Manual refresh only — live updates are unavailable for this workspace")
     }
 
     // MARK: - List Content
