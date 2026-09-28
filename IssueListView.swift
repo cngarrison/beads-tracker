@@ -1712,6 +1712,7 @@ struct IssueEditSheet: View {
     @State private var newCommentText: String = ""
     @State private var isAddingComment = false
     @State private var commentError: String? = nil
+    @State private var showDraftCommentAlert = false
     @State private var newDepID: String = ""
     @State private var newDepType: String = "blocks"
     @State private var isAddingDep = false
@@ -1951,7 +1952,7 @@ struct IssueEditSheet: View {
                     .keyboardShortcut(.escape, modifiers: [])
                 Spacer()
                 if isSaving { ProgressView().scaleEffect(0.75).padding(.trailing, 4) }
-                Button("Save") { saveIssue() }
+                Button("Save") { attemptSave() }
                     .buttonStyle(.borderedProminent)
                     .disabled(!canSave)
                     .keyboardShortcut(.return, modifiers: .command)
@@ -1961,6 +1962,30 @@ struct IssueEditSheet: View {
         }
         .frame(width: max(520, preferredWidth - 80), height: max(540, preferredHeight - 100))
         .task { await loadDetail() }
+        .alert("Unsaved Comment", isPresented: $showDraftCommentAlert) {
+            Button("Add Comment & Save") {
+                Task {
+                    await addComment()
+                    saveIssue()
+                }
+            }
+            Button("Discard Comment & Save", role: .destructive) {
+                newCommentText = ""
+                saveIssue()
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("You have an unsaved comment draft that hasn't been added yet. What would you like to do?")
+        }
+    }
+
+    private func attemptSave() {
+        let draft = newCommentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !draft.isEmpty {
+            showDraftCommentAlert = true
+        } else {
+            saveIssue()
+        }
     }
 
     private func loadDetail() async {
