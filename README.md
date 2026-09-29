@@ -30,6 +30,8 @@ A native macOS app for creating and viewing issues in the [beads](https://github
 - **Create issues** via a form that mirrors `bd create-form` — title, description, type, priority, assignee, labels, external reference, design notes, acceptance criteria, and dependencies
 - **Browse open issues** in a live list with status indicators, priority badges, and one-click ID copying
 - **Persistent repo selection** — pick your beads working directory once and it's remembered across launches
+- **Multi-window** — open a separate window per project/repo, each with its own working directory and issue list
+- **Works with embedded or server-mode Dolt** — no special configuration needed; the app just shells out to `bd`, so it follows whatever storage mode your project is already using
 
 ---
 
@@ -47,6 +49,12 @@ brew install librsvg   # provides rsvg-convert
 ```
 
 ---
+
+## Install
+
+The easiest way to run Beads Tracker is to download the latest signed and notarized disk image from [GitHub Releases](https://github.com/cngarrison/beads-tracker/releases) — built automatically by a GitHub Actions release workflow. Download the `.dmg`, mount it, drag **Beads Tracker** into **Applications**, and launch it; macOS Gatekeeper will not show an unidentified-developer warning since the app is signed and notarized.
+
+Prefer to build it yourself? See [Build & run](#build--run) below.
 
 ## Build & run
 
@@ -140,7 +148,7 @@ beads-tracker/
 └── README.md
 ```
 
-There is no Xcode project, no Swift Package Manager manifest, no third-party dependencies. `swiftc` compiles all source files directly into an `.app` bundle — the entire build is a single `swiftc` invocation in the `Makefile`.
+There is no Xcode project, no Swift Package Manager manifest, no third-party dependencies. `swiftc` compiles all source files directly into an `.app` bundle — the entire build is a single `swiftc` invocation in the `Makefile`. This minimal footprint is a deliberate design goal, not an oversight: keeping the codebase small and dependency-free means an AI coding agent (or a new human contributor) can read the whole project in one pass and ship a change without first onboarding onto a large build system.
 
 ---
 
