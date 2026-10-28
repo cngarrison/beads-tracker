@@ -27,6 +27,57 @@ private struct EventsTruncationError: Decodable {
     let since: Int?
 }
 
+// MARK: - Process registry
+
+/// App-wide record of every live `bd events tail` process, so they can all be
+/// terminated on app quit (`AppDelegate.applicationWillTerminate`) — `deinit` never
+/// runs at quit, which left tail processes running after the app exited (bt-elk).
+/// Lock-protected rather than MainActor-isolated so `deinit` can unregister too.
+final class TailProcessRegistry: @unchecked Sendable {
+    static let shared = TailProcessRegistry()
+    private let lock = NSLock()
+    private var processes: [String: Process] = [:]
+
+    func register(_ process: Process, for owner: String) {
+        lock.lock(); defer { lock.unlock() }
+        processes[owner] = process
+    }
+
+    func unregister(_ owner: String) {
+        lock.lock(); defer { lock.unlock() }
+        processes[owner] = nil
+    }
+
+    func terminateAll() {
+        lock.lock()
+        let all = processes
+        processes = [:]
+        lock.unlock()
+        for (owner, p) in all where p.isRunning {
+            BTLog.log("[\(owner)] terminateAll: terminating pid=\(p.processIdentifier)", category: "events")
+            p.terminationHandler = nil
+            p.terminate()
+        }
+    }
+}
+
+/// Resumes a continuation exactly once, whichever of several racing tasks gets there first.
+private final class ResumeOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Never>?
+    init(_ continuation: CheckedContinuation<Void, Never>) { self.continuation = continuation }
+    /// Returns true if this call was the one that resumed.
+    @discardableResult
+    func resume() -> Bool {
+        lock.lock()
+        let c = continuation
+        continuation = nil
+        lock.unlock()
+        c?.resume()
+        return c != nil
+    }
+}
+
 // MARK: - BeadsEventsWatcher
 
 /// One instance per open workspace/window. Create as a `@StateObject` in the
@@ -48,6 +99,10 @@ final class BeadsEventsWatcher: ObservableObject {
     private var stderrBuffer = Data()
     private var workingDirectory: String = ""
     private var intentionallyStopped = false
+    /// Bumped by every start()/stop(). Async work (journal enable, retries) captures the
+    /// value it was started under and bails if it no longer matches, so an in-flight
+    /// start() superseded by a newer one can't spawn a second, orphaned tail process.
+    private var generation = 0
     private var consecutiveFailures = 0
     private let maxConsecutiveFailures = 3
     private var debounceWorkItem: DispatchWorkItem?
@@ -91,8 +146,10 @@ final class BeadsEventsWatcher: ObservableObject {
         self.onRefreshNeeded = onRefreshNeeded
         self.intentionallyStopped = false
         self.consecutiveFailures = 0
+        let gen = generation
 
         BTLog.log("[\(instanceID)] start() workingDirectory=\(workingDirectory)", category: "events")
+        let id = instanceID
         Task.detached(priority: .utility) {
             // NOTE: `BeadsRunner.enableEventsJournal` uses a *blocking* stdout read
             // (`readDataToEndOfFile()`) under the hood. If the underlying `bd` command
@@ -102,27 +159,30 @@ final class BeadsEventsWatcher: ObservableObject {
             // this exact scenario was diagnosed as the root cause of the watcher getting
             // permanently stuck before ever reaching beginTailing(). Race it against a
             // timeout so a hang here can never block real-time sync from starting.
-            await withTaskGroup(of: Void.self) { group in
-                group.addTask {
+            //
+            // Both racers are unstructured tasks resuming a shared continuation: a task
+            // group can't be used here because withTaskGroup waits for every child before
+            // returning (cancelAll() can't interrupt a blocking read), which made the
+            // timeout ineffective.
+            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                let once = ResumeOnce(cont)
+                Task.detached(priority: .utility) {
                     do {
                         try BeadsRunner.enableEventsJournal(workingDirectory: workingDirectory)
-                        BTLog.log("[\(self.instanceID)] enableEventsJournal OK", category: "events")
+                        BTLog.log("[\(id)] enableEventsJournal OK", category: "events")
                     } catch {
-                        BTLog.log("[\(self.instanceID)] enableEventsJournal FAILED: \(error)", category: "events")
+                        BTLog.log("[\(id)] enableEventsJournal FAILED: \(error)", category: "events")
+                    }
+                    once.resume()
+                }
+                Task.detached(priority: .utility) {
+                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                    if once.resume() {   // false if the real call already finished
+                        BTLog.log("[\(id)] enableEventsJournal TIMED OUT after 5s — proceeding to tail anyway (see BTLog.swift doc comment / memory notes on pipe-deadlock root cause)", category: "events")
                     }
                 }
-                group.addTask {
-                    do {
-                        try await Task.sleep(nanoseconds: 5_000_000_000)
-                        BTLog.log("enableEventsJournal TIMED OUT after 5s — proceeding to tail anyway (see BTLog.swift doc comment / memory notes on pipe-deadlock root cause)", category: "events")
-                    } catch {
-                        // Cancelled because the real call finished first — not an actual timeout, don't log.
-                    }
-                }
-                await group.next()   // proceed as soon as either finishes
-                group.cancelAll()   // best-effort; the blocking call itself may still be stuck, but we stop waiting on it
             }
-            await self.beginTailing()
+            await self.beginTailing(generation: gen)
         }
     }
 
@@ -134,15 +194,15 @@ final class BeadsEventsWatcher: ObservableObject {
     /// teardown/recreate during initial layout, which would poison this persisted
     /// @StateObject before its in-flight `start()` ever completes (diagnosed root
     /// cause of the app always launching in "Manual" mode). True end-of-life cleanup
-    /// is instead handled by `deinit` below, which only fires on real deallocation.
+    /// is instead handled by `deinit` below, which only fires on real deallocation,
+    /// and by IssueListView's window-close observer, which calls stop() directly.
     func stop() {
         BTLog.log("[\(instanceID)] stop() called, workingDirectory=\(workingDirectory)", category: "events")
         intentionallyStopped = true
+        generation += 1
         debounceWorkItem?.cancel()
         debounceWorkItem = nil
-        process?.terminationHandler = nil
-        process?.terminate()
-        process = nil
+        terminateProcess()
         isLive = false
     }
 
@@ -152,13 +212,23 @@ final class BeadsEventsWatcher: ObservableObject {
         // touching @Published/MainActor-isolated state here.
         process?.terminationHandler = nil
         process?.terminate()
+        TailProcessRegistry.shared.unregister(instanceID)
+    }
+
+    private func terminateProcess() {
+        (process?.standardOutput as? Pipe)?.fileHandleForReading.readabilityHandler = nil
+        (process?.standardError as? Pipe)?.fileHandleForReading.readabilityHandler = nil
+        process?.terminationHandler = nil
+        process?.terminate()
+        process = nil
+        TailProcessRegistry.shared.unregister(instanceID)
     }
 
     // MARK: Tailing
 
-    private func beginTailing() async {
-        guard !intentionallyStopped else {
-            BTLog.log("[\(instanceID)] beginTailing: bailing early, intentionallyStopped=true (stop() was already called)", category: "events")
+    private func beginTailing(generation gen: Int) async {
+        guard !intentionallyStopped, gen == generation else {
+            BTLog.log("[\(instanceID)] beginTailing: bailing early, intentionallyStopped=\(intentionallyStopped) generation \(gen) vs \(generation) (stopped or superseded)", category: "events")
             return
         }
         let dir = workingDirectory
@@ -176,6 +246,8 @@ final class BeadsEventsWatcher: ObservableObject {
 
     private func spawnTailProcess(since: Int) {
         guard !intentionallyStopped else { return }
+        // Never let a previous process be overwritten (and so orphaned) by a new one.
+        terminateProcess()
         let dir = workingDirectory
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -220,6 +292,7 @@ final class BeadsEventsWatcher: ObservableObject {
         do {
             try p.run()
             process = p
+            TailProcessRegistry.shared.register(p, for: instanceID)
             isLive = true
             consecutiveFailures = 0
             BTLog.log("spawnTailProcess OK pid=\(p.processIdentifier)", category: "events")
@@ -266,9 +339,7 @@ final class BeadsEventsWatcher: ObservableObject {
         showToast("Reconnected \u{2014} refreshing workspace")
         onRefreshNeeded?()
 
-        process?.terminationHandler = nil
-        process?.terminate()
-        process = nil
+        terminateProcess()
         isLive = false
 
         if let head = trunc.head {
@@ -286,6 +357,8 @@ final class BeadsEventsWatcher: ObservableObject {
         let stderrText = String(data: stderrBuffer, encoding: .utf8) ?? "<undecodable>"
         BTLog.log("process terminated status=\(status) intentionallyStopped=\(intentionallyStopped) stderr=\(stderrText.isEmpty ? "<empty>" : stderrText)", category: "events")
         guard !intentionallyStopped else { return }
+        process = nil
+        TailProcessRegistry.shared.unregister(instanceID)
         isLive = false
         registerFailureAndMaybeRetry()
     }
@@ -301,8 +374,9 @@ final class BeadsEventsWatcher: ObservableObject {
         }
         let delay = Double(consecutiveFailures) * 1.5
         let dir = workingDirectory
+        let gen = generation
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            guard let self, self.workingDirectory == dir, !self.intentionallyStopped else { return }
+            guard let self, self.workingDirectory == dir, self.generation == gen, !self.intentionallyStopped else { return }
             let since = Self.checkpoint(for: dir) ?? 0
             self.spawnTailProcess(since: since)
         }

@@ -53,7 +53,17 @@ struct IssueListView: View {
     var refreshTrigger: Int = 0
     @Binding var detailPanelWidth: Double
 
+    /// Displayed tree: `fetchedIssues` after local filters (priority/type/title/ID) and nesting.
     @State private var issues:       [BeadsIssue] = []
+    /// Flat result of the last `bd list`, filtered server-side only by `serverFilterArgs`.
+    @State private var fetchedIssues: [BeadsIssue] = []
+    /// `serverFilterArgs` used for `fetchedIssues`; when unchanged, filter edits re-filter locally.
+    @State private var fetchedArgs:  [String]? = nil
+    /// True once a load has completed for the current workspace; later refreshes keep the
+    /// list on screen instead of swapping it for the loading spinner.
+    @State private var hasLoaded     = false
+    /// Bumped at the start of every load so an older, slower load can't overwrite a newer one.
+    @State private var loadGeneration = 0
     @State private var isLoading     = false
     @State private var loadingCount  = 0
     @State private var errorMessage: String? = nil
@@ -92,35 +102,35 @@ struct IssueListView: View {
         return ["--status", selectedStatuses.sorted().joined(separator: ",")]
     }
 
-    private var priorityFilterArgs: [String] {
-        let all: Set<String> = ["0", "1", "2", "3", "4"]
-        if selectedPriorities.isEmpty || selectedPriorities == all { return [] }
-        if selectedPriorities.count == 1 {
-            return ["--priority", selectedPriorities.first!]
-        }
-        // Use --priority-min/--priority-max; for non-contiguous selections this is
-        // an approximation (bd list does not support multi-value --priority).
-        let sorted = selectedPriorities.compactMap { Int($0) }.sorted()
-        return ["--priority-min", String(sorted.first!), "--priority-max", String(sorted.last!)]
-    }
-
-    private var typeFilterArgs: [String] {
-        let allMenuTypes: Set<String> = ["bug", "feature", "task", "epic", "chore", "decision"]
-        if selectedTypes.isEmpty || selectedTypes == allMenuTypes { return [] }
-        // --type does not support comma-separated; use --exclude-type (which does) with
-        // the inverse set of the user's selection.
-        let excluded = allMenuTypes.subtracting(selectedTypes)
-        return ["--exclude-type", excluded.sorted().joined(separator: ",")]
-    }
-
-    private var titleFilterArgs: [String] {
+    /// Description/notes search stays server-side: `bd list --brief` doesn't return those
+    /// fields, so they can't be matched locally. Title and ID search are local.
+    private var textSearchArgs: [String] {
         let q = titleSearch.trimmingCharacters(in: .whitespaces)
-        guard !q.isEmpty, let flag = searchScope.flag else { return [] }
+        guard !q.isEmpty, searchScope == .description || searchScope == .notes,
+              let flag = searchScope.flag else { return [] }
         return [flag, q]
     }
 
-    private var allFilterArgs: [String] {
-        statusFilterArgs + priorityFilterArgs + typeFilterArgs + titleFilterArgs
+    /// Filters passed to `bd list`. Everything else is applied locally in `applyLocalFilters()`
+    /// so toggling priority/type or typing a title/ID search doesn't spawn a `bd` process.
+    private var serverFilterArgs: [String] {
+        statusFilterArgs + textSearchArgs
+    }
+
+    private func passesLocalFilters(_ issue: BeadsIssue) -> Bool {
+        let allPriorities: Set<String> = ["0", "1", "2", "3", "4"]
+        if !selectedPriorities.isEmpty, selectedPriorities != allPriorities,
+           !selectedPriorities.contains(String(issue.priority)) { return false }
+
+        // Same semantics as the former --exclude-type: hide only the unselected menu
+        // types, so types not in the menu (or no type) always show.
+        let allMenuTypes: Set<String> = ["bug", "feature", "task", "epic", "chore", "decision"]
+        if !selectedTypes.isEmpty, selectedTypes != allMenuTypes,
+           let type = issue.issueType, allMenuTypes.subtracting(selectedTypes).contains(type) { return false }
+
+        let q = titleSearch.trimmingCharacters(in: .whitespaces)
+        if !q.isEmpty, searchScope == .title, !issue.title.localizedCaseInsensitiveContains(q) { return false }
+        return true
     }
 
     // Copy details toolbar feedback
@@ -185,9 +195,12 @@ struct IssueListView: View {
         // NOTE: intentionally no `.onDisappear { eventsWatcher.stop() }` here — SwiftUI can
         // fire onDisappear on a transient view teardown/recreate during initial layout,
         // which would kill the watcher before it ever starts (diagnosed root cause of the
-        // app always launching in "Manual" mode). Cleanup on true teardown is handled by
-        // BeadsEventsWatcher.deinit instead; workspace switching still tears down the
-        // previous process correctly via start()'s internal stop() call.
+        // app always launching in "Manual" mode). Instead the watcher is stopped when this
+        // view's NSWindow actually closes (SwiftUI may keep the @StateObject alive for scene
+        // restoration, so deinit alone isn't reliable — bt-elk), with deinit as a backstop
+        // and AppDelegate.applicationWillTerminate covering app quit. Workspace switching
+        // still tears down the previous process via start()'s internal stop() call.
+        .background(WindowCloseObserver { [eventsWatcher] in eventsWatcher.stop() })
         .overlay(alignment: .top) {
             if let msg = eventsWatcher.toastMessage {
                 Text(msg)
@@ -201,16 +214,19 @@ struct IssueListView: View {
         }
         .animation(.easeInOut(duration: 0.2), value: eventsWatcher.toastMessage)
         .onChange(of: workingDirectory) { newDir in
+            // Don't show the previous workspace's issues while the new one loads.
+            issues = []; fetchedIssues = []; fetchedArgs = nil; hasLoaded = false
             Task { await loadIssues(dir: newDir) }
             eventsWatcher.start(workingDirectory: newDir) { Task { await loadIssues(dir: newDir) } }
         }
-        .onChange(of: refreshTrigger) { _ in Task { await loadIssues() } }
-        .onChange(of: selectedStatuses)  { _ in Task { await loadIssues() } }
-        .onChange(of: searchScope)        { _ in Task { await loadIssues() } }
-        .onChange(of: selectedPriorities) { _ in Task { await loadIssues() } }
-        .onChange(of: selectedTypes)      { _ in Task { await loadIssues() } }
+        .onChange(of: refreshTrigger) { _ in refreshAfterOwnChange() }
+        .onChange(of: selectedStatuses)   { _ in refilter() }
+        .onChange(of: searchScope)        { _ in refilter() }
+        .onChange(of: selectedPriorities) { _ in refilter() }
+        .onChange(of: selectedTypes)      { _ in refilter() }
         .onChange(of: titleSearch) { _ in
             searchDebounceTask?.cancel()
+            guard serverFilterArgs != fetchedArgs else { applyLocalFilters(); return }
             let work = DispatchWorkItem { Task { await self.loadIssues() } }
             searchDebounceTask = work
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
@@ -238,7 +254,7 @@ struct IssueListView: View {
                 workingDirectory: workingDirectory,
                 preferredWidth: w,
                 preferredHeight: h,
-                onSaved: { Task { await loadIssues() } }
+                onSaved: { refreshAfterOwnChange() }
             )
         }
     }
@@ -280,6 +296,12 @@ struct IssueListView: View {
             .buttonStyle(.bordered).controlSize(.small)
             .help(showDetailPanel ? "Hide detail panel" : "Show detail panel")
 
+            // Background refresh indicator (the list itself stays on screen; see hasLoaded)
+            if isLoading && hasLoaded {
+                ProgressView().scaleEffect(0.5).frame(width: 16, height: 16)
+                    .help("Refreshing\u{2026}")
+            }
+
             Button { Task { await loadIssues() } } label: {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
@@ -315,7 +337,7 @@ struct IssueListView: View {
             emptyState(icon: "folder.badge.questionmark",
                        title: "No Repository Selected",
                        message: "Use the Choose\u{2026} button to select a beads repository.")
-        } else if isLoading {
+        } else if isLoading && !hasLoaded {
             VStack(spacing: 12) {
                 ProgressView()
                 Text(loadingCount > 0 ? "Loading issues\u{2026} (\(loadingCount) found)" : "Loading issues\u{2026}")
@@ -658,7 +680,7 @@ struct IssueListView: View {
             try await Task.detached(priority: .userInitiated) {
                 try BeadsRunner.claim(id: issue.id, workingDirectory: dir)
             }.value
-            await loadIssues()
+            refreshAfterOwnChange()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -670,7 +692,7 @@ struct IssueListView: View {
             try await Task.detached(priority: .userInitiated) {
                 try BeadsRunner.close(id: issue.id, workingDirectory: dir)
             }.value
-            await loadIssues()
+            refreshAfterOwnChange()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -685,7 +707,7 @@ struct IssueListView: View {
                 try BeadsRunner.setStatus(id: id, status: newStatus, workingDirectory: dir)
             }.value
             await loadPanelDetails()
-            await loadIssues()
+            refreshAfterOwnChange()
             showStatusChanged = true
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             showStatusChanged = false
@@ -706,38 +728,81 @@ struct IssueListView: View {
         }
     }
 
+    /// After a change made from this window: when live, the change's own journal event
+    /// triggers the refresh, so don't run a second `bd list`. Fall back to an explicit load
+    /// if no refresh has started shortly after (watcher not live, or the event never came,
+    /// e.g. the journal couldn't be enabled).
+    private func refreshAfterOwnChange() {
+        let dir = workingDirectory
+        guard eventsWatcher.isLive else { Task { await loadIssues(dir: dir) }; return }
+        let generationBefore = loadGeneration
+        Task {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            if loadGeneration == generationBefore { await loadIssues(dir: dir) }
+        }
+    }
+
+    /// Re-applies filters after a filter control changes: locally when the server-side
+    /// arguments are unchanged, otherwise via a new `bd list`.
+    private func refilter() {
+        if serverFilterArgs == fetchedArgs { applyLocalFilters() }
+        else { Task { await loadIssues() } }
+    }
+
     private func loadIssues(dir explicitDir: String? = nil) async {
         let dir = explicitDir ?? workingDirectory
         guard !dir.isEmpty else { return }
+        loadGeneration += 1
+        let generation = loadGeneration
+        let args = serverFilterArgs
         isLoading = true; loadingCount = 0; errorMessage = nil
-        let (progressStream, bgTask) = BeadsRunner.listWithProgress(workingDirectory: dir, extraArgs: allFilterArgs)
-        for await count in progressStream { loadingCount = count }
-        do {
-            issues = try await bgTask.value
-
-            // Client-side filtering for `.id` scope: bd list has no ID-substring flag
-            // (only exact --id), so match against issue.id here instead.
-            let searchQuery = titleSearch.trimmingCharacters(in: .whitespaces)
-            if !searchQuery.isEmpty, searchScope == .id {
-                issues = clientSideSearchFilter(issues, query: searchQuery, scope: searchScope)
-            }
-
-            // Clean up persisted state: remove IDs that no longer exist
-            let validIDs = allIssueIDs(in: issues)
-            
-            // Restore selection from SceneStorage (after issues are loaded)
-            let restoredSelection = decodeIDSet(selectedIDsJSON).intersection(validIDs)
-            selectedIDs = restoredSelection
-            
-            // Clean up expanded IDs
-            expandedIDs = expandedIDs.intersection(validIDs)
-            
-            // Persist cleaned selection back to SceneStorage
-            selectedIDsJSON = encodeIDSet(selectedIDs)
-        } catch {
+        let (progressStream, bgTask) = BeadsRunner.listWithProgress(workingDirectory: dir, extraArgs: args)
+        for await count in progressStream where generation == loadGeneration { loadingCount = count }
+        let result = await bgTask.result
+        // A newer load started while this one ran; it owns isLoading and the result. A
+        // workspace switch always starts a new load, so this also discards the old
+        // workspace's result. Don't compare against `workingDirectory` here: callers from
+        // onChange and the events watcher run on a stale struct copy whose `let` is the
+        // previous directory (GUIDELINES #5), which left the spinner up forever.
+        guard generation == loadGeneration else { return }
+        switch result {
+        case .success(let flat):
+            fetchedIssues = flat
+            fetchedArgs = args
+            hasLoaded = true
+            applyLocalFilters()
+        case .failure(let error):
             errorMessage = error.localizedDescription
         }
         isLoading = false
+    }
+
+    /// Builds the displayed tree from `fetchedIssues` and prunes persisted selection/expansion
+    /// to the IDs still shown. Cheap (in-memory), so it runs on every filter edit.
+    private func applyLocalFilters() {
+        var tree = BeadsRunner.buildTree(fetchedIssues.filter(passesLocalFilters))
+
+        // Client-side filtering for `.id` scope: bd list has no ID-substring flag
+        // (only exact --id), so match against issue.id here instead.
+        let searchQuery = titleSearch.trimmingCharacters(in: .whitespaces)
+        if !searchQuery.isEmpty, searchScope == .id {
+            tree = clientSideSearchFilter(tree, query: searchQuery, scope: searchScope)
+        }
+        issues = tree
+
+        // Clean up persisted state: remove IDs that no longer exist
+        let validIDs = allIssueIDs(in: issues)
+
+        // Restore selection from SceneStorage (after issues are loaded)
+        let restoredSelection = decodeIDSet(selectedIDsJSON).intersection(validIDs)
+        if restoredSelection != selectedIDs { selectedIDs = restoredSelection }
+
+        // Clean up expanded IDs
+        let keptExpanded = expandedIDs.intersection(validIDs)
+        if keptExpanded != expandedIDs { expandedIDs = keptExpanded }
+
+        // Persist cleaned selection back to SceneStorage
+        selectedIDsJSON = encodeIDSet(selectedIDs)
     }
     
     // MARK: - Recursive Issue Row Rendering

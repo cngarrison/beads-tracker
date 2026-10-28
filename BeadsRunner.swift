@@ -44,7 +44,10 @@ enum BeadsRunner {
 
     // MARK: List
 
-    /// Returns a progress stream (running issue count) and a background task resolving to the full issue tree.
+    /// Returns a progress stream (running issue count) and a background task resolving to the flat
+    /// issue list (in `bd list` order, `children` nil). Pass it to `buildTree(_:)` to get the tree,
+    /// after any client-side filtering. Uses `--brief` (no free-text fields; text filters such as
+    /// `--desc-contains` still select on them), which is ~3x smaller on large workspaces.
     /// Consume the stream on the main actor to update UI, then await the task for the final result.
     static func listWithProgress(workingDirectory: String, extraArgs: [String] = []) -> (AsyncStream<Int>, Task<[BeadsIssue], Error>) {
         let (stream, continuation) = AsyncStream<Int>.makeStream()
@@ -60,7 +63,7 @@ enum BeadsRunner {
     private static func listInternal(workingDirectory: String, extraArgs: [String] = [], onProgress: @escaping (Int) -> Void) throws -> [BeadsIssue] {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        p.arguments = ["bd", "list"] + extraArgs + ["--json", "--limit", "0"]
+        p.arguments = ["bd", "list"] + extraArgs + ["--json", "--brief", "--limit", "0"]
         p.environment = pathHelperEnvironment()
         if !workingDirectory.isEmpty { p.currentDirectoryURL = URL(fileURLWithPath: workingDirectory) }
         let out = Pipe(), err = Pipe()
@@ -110,7 +113,7 @@ enum BeadsRunner {
             }
             throw BeadsError.commandFailed(msg.isEmpty ? stdout : msg)
         }
-        return try buildTree(from: stdout)
+        return try parseFlat(from: stdout)
     }
 
     // MARK: Show (plain text — used by IssueDetailSheet)
@@ -307,7 +310,7 @@ enum BeadsRunner {
 
     // MARK: Parse (JSON → tree)
 
-    private static func buildTree(from json: String) throws -> [BeadsIssue] {
+    private static func parseFlat(from json: String) throws -> [BeadsIssue] {
         struct RawIssue: Decodable {
             let id: String
             let title: String
@@ -333,21 +336,29 @@ enum BeadsRunner {
 
         let unwrapped = try unwrapJSONEnvelope(Data(json.utf8))
         let raw = try JSONDecoder().decode([RawIssue].self, from: unwrapped)
+        return raw.map { r in
+            BeadsIssue(id: r.id, title: r.title, status: r.status,
+                       priority: r.priority, issueType: r.issueType,
+                       parentID: r.parent,
+                       dependencyCount: r.dependencyCount ?? 0,
+                       dependentCount:  r.dependentCount  ?? 0,
+                       updatedAt: r.updatedAt,
+                       due: r.due,
+                       deferUntil: r.deferUntil,
+                       children: nil)
+        }
+    }
 
-        // Build flat map and child index
+    // MARK: Tree (flat → tree)
+
+    /// Nests a flat issue list by `parentID`, preserving input order. A child whose parent
+    /// isn't in the list (filtered out, or not fetched) is promoted to a root.
+    static func buildTree(_ flat: [BeadsIssue]) -> [BeadsIssue] {
         var nodeMap: [String: BeadsIssue] = [:]
         var childIndex: [String: [String]] = [:]   // parentID → [childID]
-        for r in raw {
-            nodeMap[r.id] = BeadsIssue(id: r.id, title: r.title, status: r.status,
-                                       priority: r.priority, issueType: r.issueType,
-                                       parentID: r.parent,
-                                       dependencyCount: r.dependencyCount ?? 0,
-                                       dependentCount:  r.dependentCount  ?? 0,
-                                       updatedAt: r.updatedAt,
-                                       due: r.due,
-                                       deferUntil: r.deferUntil,
-                                       children: nil)
-            if let p = r.parent { childIndex[p, default: []].append(r.id) }
+        for issue in flat {
+            nodeMap[issue.id] = issue
+            if let p = issue.parentID { childIndex[p, default: []].append(issue.id) }
         }
 
         // Recursively attach children
@@ -359,8 +370,8 @@ enum BeadsRunner {
         }
 
         // Roots: no parent, or parent not present in this result set
-        let rootIDs = raw.filter { r in
-            guard let p = r.parent else { return true }
+        let rootIDs = flat.filter { r in
+            guard let p = r.parentID else { return true }
             return nodeMap[p] == nil   // orphan → promote to root
         }.map { $0.id }
 

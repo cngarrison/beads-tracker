@@ -282,6 +282,11 @@ class FormDraftManager: ObservableObject {
 // MARK: - App Delegate (quit protection)
 
 class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillTerminate(_ notification: Notification) {
+        // Watchers' deinit doesn't run at quit, so kill every `bd events tail` explicitly.
+        TailProcessRegistry.shared.terminateAll()
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let manager = FormDraftManager.shared
         guard manager.fields.hasUnsavedContent else { return .terminateNow }

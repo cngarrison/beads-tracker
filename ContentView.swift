@@ -157,6 +157,43 @@ struct ContentView: View {
     }
 }
 
+// MARK: - Window Close Observer
+
+/// Calls `onClose` when the hosting NSWindow is about to close (a real user close, unlike
+/// `.onDisappear`, which SwiftUI also fires on transient view teardown during layout).
+struct WindowCloseObserver: NSViewRepresentable {
+    let onClose: () -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = ObservingView()
+        view.onClose = onClose
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        (nsView as? ObservingView)?.onClose = onClose
+    }
+
+    final class ObservingView: NSView {
+        var onClose: (() -> Void)?
+        private var token: NSObjectProtocol?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let token { NotificationCenter.default.removeObserver(token) }
+            token = nil
+            guard let window else { return }
+            token = NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification, object: window, queue: .main
+            ) { [weak self] _ in self?.onClose?() }
+        }
+
+        deinit {
+            if let token { NotificationCenter.default.removeObserver(token) }
+        }
+    }
+}
+
 // MARK: - Window Title Setter
 
 /// Sets the NSWindow title reactively from SwiftUI state.
