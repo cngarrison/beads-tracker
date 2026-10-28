@@ -44,12 +44,11 @@ enum BeadsRunner {
 
     // MARK: List
 
-    /// Returns a progress stream (running issue count) and a background task resolving to the flat
-    /// issue list (in `bd list` order, `children` nil). Pass it to `buildTree(_:)` to get the tree,
-    /// after any client-side filtering. Uses `--brief` (no free-text fields; text filters such as
-    /// `--desc-contains` still select on them), which is ~3x smaller on large workspaces.
+    /// Runs `bd list --json --limit 0 <extraArgs>` (full rows, including free text and each
+    /// row's `dependencies`). Returns a progress stream (running issue count) and a background
+    /// task resolving to the JSON payload (envelope unwrapped); WorkspaceStore decodes it.
     /// Consume the stream on the main actor to update UI, then await the task for the final result.
-    static func listWithProgress(workingDirectory: String, extraArgs: [String] = []) -> (AsyncStream<Int>, Task<[BeadsIssue], Error>) {
+    static func listWithProgress(workingDirectory: String, extraArgs: [String] = []) -> (AsyncStream<Int>, Task<Data, Error>) {
         let (stream, continuation) = AsyncStream<Int>.makeStream()
         let bgTask = Task.detached(priority: .userInitiated) {
             defer { continuation.finish() }
@@ -60,10 +59,10 @@ enum BeadsRunner {
         return (stream, bgTask)
     }
 
-    private static func listInternal(workingDirectory: String, extraArgs: [String] = [], onProgress: @escaping (Int) -> Void) throws -> [BeadsIssue] {
+    private static func listInternal(workingDirectory: String, extraArgs: [String] = [], onProgress: @escaping (Int) -> Void) throws -> Data {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        p.arguments = ["bd", "list"] + extraArgs + ["--json", "--brief", "--limit", "0"]
+        p.arguments = ["bd", "list"] + extraArgs + ["--json", "--limit", "0"]
         p.environment = pathHelperEnvironment()
         if !workingDirectory.isEmpty { p.currentDirectoryURL = URL(fileURLWithPath: workingDirectory) }
         let out = Pipe(), err = Pipe()
@@ -113,7 +112,7 @@ enum BeadsRunner {
             }
             throw BeadsError.commandFailed(msg.isEmpty ? stdout : msg)
         }
-        return try parseFlat(from: stdout)
+        return try unwrapJSONEnvelope(stdoutData)
     }
 
     // MARK: Show (plain text — used by IssueDetailSheet)
@@ -306,47 +305,6 @@ enum BeadsRunner {
             return data
         }
         return try JSONSerialization.data(withJSONObject: payload)
-    }
-
-    // MARK: Parse (JSON → tree)
-
-    private static func parseFlat(from json: String) throws -> [BeadsIssue] {
-        struct RawIssue: Decodable {
-            let id: String
-            let title: String
-            let status: String
-            let priority: Int
-            let issueType: String?
-            let parent: String?
-            let dependencyCount: Int?
-            let dependentCount:  Int?
-            let updatedAt: String
-            let due: String?
-            let deferUntil: String?
-            enum CodingKeys: String, CodingKey {
-                case id, title, status, priority, parent
-                case issueType = "issue_type"
-                case dependencyCount = "dependency_count"
-                case dependentCount  = "dependent_count"
-                case updatedAt = "updated_at"
-                case due = "due_at"
-                case deferUntil = "defer_until"
-            }
-        }
-
-        let unwrapped = try unwrapJSONEnvelope(Data(json.utf8))
-        let raw = try JSONDecoder().decode([RawIssue].self, from: unwrapped)
-        return raw.map { r in
-            BeadsIssue(id: r.id, title: r.title, status: r.status,
-                       priority: r.priority, issueType: r.issueType,
-                       parentID: r.parent,
-                       dependencyCount: r.dependencyCount ?? 0,
-                       dependentCount:  r.dependentCount  ?? 0,
-                       updatedAt: r.updatedAt,
-                       due: r.due,
-                       deferUntil: r.deferUntil,
-                       children: nil)
-        }
     }
 
     // MARK: Tree (flat → tree)

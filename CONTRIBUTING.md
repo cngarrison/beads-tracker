@@ -114,6 +114,7 @@ ContentView.swift          ── App entry point (@main), ContentView, top bar,
 Models.swift               ── Enums, data structs, date helpers, FormDraftManager, AppDelegate
 BeadsRunner.swift          ── CLI interaction layer: all `bd` subprocess calls
 BeadsEventsWatcher.swift   ── `bd events tail --follow` subprocess for live updates
+WorkspaceStore.swift       ── Shared in-memory copy of a workspace's issues, patched from events
 CreateIssueView.swift      ── CreateIssueView, IssueFormContent, shared form helpers
 IssueListView.swift        ── Issue list, detail card, Markdown rendering, detail/edit sheets
 BTLog.swift                ── File-based diagnostic logger
@@ -140,6 +141,8 @@ There aren’t many rules, but please follow these:
 **Follow the file you’re in** — each file starts with a header comment saying what it holds, and uses `// MARK: -` sections. Put new code where it belongs and follow the existing patterns (file-scope helper functions, `@SceneStorage` vs `@State` usage, SF Symbols and styling).
 
 **`BeadsRunner`** — all `bd` calls go through `BeadsRunner` (most via its `run(_:in:)` helper). The one long-running exception is the `bd events tail` process owned by `BeadsEventsWatcher`. Don’t spawn `Process` directly in views.
+
+**`WorkspaceStore`** — the issue list reads from one in-memory store per workspace path, shared by every window showing it. It is baselined from `bd list --all --json`, patched from `bd events tail`, and re-read in the background every few minutes (the journal doesn’t record `bd dolt pull`, merges or `bd sql` writes). Filters and search are applied in memory, so don’t add `bd list` calls for filtering; after a change made through `BeadsRunner`, call `store.expectOwnChange()` rather than re-reading.
 
 **Don’t guess `bd` output** — check real output (`bd show <id> --json`, `bd list --json`, `bd <command> --help`) before relying on a JSON field or flag.
 
