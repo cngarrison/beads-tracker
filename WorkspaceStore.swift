@@ -128,14 +128,18 @@ final class WorkspaceStore: ObservableObject {
                       onEvent: { [weak self] event in self?.apply(event) },
                       onResync: { [weak self] in self?.rebaseline() })
         rebaseline()
+        // Unwrap self before each Task: Swift 5.10 (CI's Xcode 15.4) rejects a Task that refers
+        // to the enclosing closure's captured weak `self` var (Swift 6 accepts it).
         rebaselineTimer = Timer.scheduledTimer(withTimeInterval: Self.rebaselineInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.rebaseline() }
+            guard let self else { return }
+            Task { @MainActor in self.rebaseline() }
         }
         activationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
         ) { [weak self] _ in
+            guard let self else { return }
             Task { @MainActor in
-                guard let self, let last = self.lastBaselineAt,
+                guard let last = self.lastBaselineAt,
                       Date().timeIntervalSince(last) > Self.staleAfter else { return }
                 self.rebaseline()
             }

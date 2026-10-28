@@ -52,6 +52,9 @@ for all non-trivial work; changes committed and pushed per the session completio
      app-code git push — see BEADS.md for the beads-specific push workflow.
 2. **Always run `make` after non-trivial Swift changes** to verify the build compiles (exit 0)
    before considering work complete. Report build failures with the exact error output.
+   The release workflow (`macos-26` runner) pins `XCODE_APP` to the local Xcode (26.3) so CI
+   compiles with the same Swift. Bump it when local Xcode is upgraded; a mismatch lets a local
+   `make` pass on code CI rejects (this broke the v1.1.0 release under the old Xcode 15.4).
 3. **Never fabricate `bd` CLI behavior or JSON schema.** Confirmed schemas (e.g. `bd show --json`
    fields, `bd list --json` fields) should be treated as ground truth from prior sessions (see
    project-context memory) — verify against actual `bd` output via `execute` if uncertain, don't

@@ -35,6 +35,11 @@ Inside the sandbox `make` prints harmless `xcrun_db ... Operation not permitted`
 only `error:` lines from the Swift compiler matter. If `make` fails, report the exact compiler
 error and file/line before changing anything else.
 
+The release workflow (`.github/workflows/release.yml`, `macos-26` runner) pins `XCODE_APP` to the
+local Xcode (26.3), so CI compiles with the same Swift. When local Xcode is upgraded, bump
+`XCODE_APP` to match (it must be installed on the runner image); a mismatch lets a local `make`
+pass on code CI rejects, which broke the v1.1.0 release under the old Xcode 15.4.
+
 ## Code Rules and Known Gotchas
 
 - Follow the patterns already in the file you edit (file-scope helper functions, `@SceneStorage`
