@@ -110,19 +110,21 @@ enum BeadsError: LocalizedError {
 
 // MARK: - Data Models
 
-struct BeadsIssue: Identifiable {
+struct BeadsIssue: Identifiable, Equatable {
     let id: String
     let title: String
     let status: String       // "open", "in_progress", "closed", "deferred", "blocked"
     let priority: Int        // 0-4
     let issueType: String?   // "task", "bug", "feature", etc.
     let parentID: String?
-    let dependencyCount: Int      // issues this one depends on
-    let dependentCount:  Int      // issues depending on this one
+    let dependencyCount: Int      // `blocks` edges from this issue (what blocks it), as bd counts
+    let dependentCount:  Int      // `blocks` edges to this issue (what it blocks)
     let updatedAt: String         // ISO8601 timestamp for age display
     let due: String?              // ISO8601 due date, if set
     let deferUntil: String?       // ISO8601 defer-until date, if set
     var children: [BeadsIssue]?   // nil = leaf node
+    var description: String? = nil  // for local Description search
+    var notes: String? = nil        // for local Notes search
 
     var statusSymbol: String {
         switch status {

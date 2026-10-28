@@ -76,6 +76,10 @@ for all non-trivial work; changes committed and pushed per the session completio
    start of sessions involving issue tracking, or whenever beads command details are needed. Use
    `bd` for ALL task tracking in this repo; do not use ad hoc TODO lists or MEMORY.md files. Use the
    `memory` tool for BB's own cross-session notes only (separate from beads issue tracking).
+8. **Never wrap a list row's `DisclosureGroup` (or a view whose body is one) in `.equatable()`.**
+   The macOS `List` then stops seeing the DisclosureGroup and drops the outline: epics lose their
+   disclosure triangle and children never show. Put `.equatable()` on the row content inside it
+   instead (see `IssueTreeNode` / `IssueRowSlot` in IssueListView.swift).
 
 ## Available Data Sources and Resources
 
@@ -84,7 +88,8 @@ Single filesystem data source: **beads-tracker** (primary, root `~/working/beads
 Key resources:
 - **Source files:** `ContentView.swift`, `IssueListView.swift` (largest, ~84KB — list/detail/edit
   views), `CreateIssueView.swift`, `Models.swift`, `BeadsRunner.swift` (all `bd` CLI subprocess
-  wrapper methods), `BeadsEventsWatcher.swift` (real-time `bd events tail` sync)
+  wrapper methods), `BeadsEventsWatcher.swift` (real-time `bd events tail` sync),
+  `WorkspaceStore.swift` (shared per-workspace in-memory issue store, patched from events)
 - **Build/config:** `Makefile`, `Info.plist`, `BeadsTracker.entitlements`, `.github/` (release
   workflow), `scripts/` (release-version.sh)
 - **Docs:** `README.md`, `ROADMAP.md`, `CONTRIBUTING.md`, `BEADS.md`, `NEW_PROJECT_SETUP.md` (BB

@@ -1,20 +1,33 @@
 // BeadsEventsWatcher.swift
 // Owns the lifecycle of a `bd events tail --follow` subprocess for one open
-// workspace: enables the events journal, streams JSON-lines output, debounces
-// event bursts into a single refresh signal, tracks per-workspace checkpoints,
-// and exposes a Live/Manual health flag + one-time "Live updates enabled" toast.
+// workspace: enables the events journal, streams JSON-lines output, delivers
+// decoded journal events in order to its WorkspaceStore, tracks per-workspace
+// checkpoints, and exposes a Live/Manual health flag + one-time "Live updates
+// enabled" toast.
 
 import Foundation
 import AppKit
 
 // MARK: - Event record decoding
 
-/// Minimal decode of a `bd events tail` JSON-line record. v1 only uses events
-// as refresh signals (see design point 4) so we don't decode the nested
-/// issue/dep/comment payloads.
-private struct EventRecord: Decodable {
+/// One `bd events tail` JSON-line record. Every op carries `issue`, the full snapshot of
+/// `issue_id` after the mutation (no `parent`/counts; WorkspaceStore derives those from
+/// its edge set). `dep_add`/`dep_remove` also carry `dep` naming the other end of the edge.
+struct JournalEvent: Decodable {
+    struct Dep: Decodable {
+        let kind: String
+        let target: String
+    }
     let seq: Int
-    let op: String
+    let ts: String       // RFC3339 UTC, second resolution ("2026-10-28T12:17:08Z")
+    let op: String       // create, update, close, reopen, claim, comment, dep_add, dep_remove, delete, ...
+    let issueID: String
+    let issue: StoredIssue?
+    let dep: Dep?
+    enum CodingKeys: String, CodingKey {
+        case seq, ts, op, issue, dep
+        case issueID = "issue_id"
+    }
 }
 
 /// Shape of the JSON error line emitted when the requested `--since` checkpoint
@@ -78,11 +91,30 @@ private final class ResumeOnce: @unchecked Sendable {
     }
 }
 
+/// Splits a byte stream into UTF-8 lines, buffering any trailing partial line. Only
+/// touched from one FileHandle's readability callbacks, which are serial.
+private final class LineSplitter: @unchecked Sendable {
+    private var buffer = Data()
+
+    func append(_ chunk: Data) -> [String] {
+        buffer.append(chunk)
+        var lines: [String] = []
+        while let range = buffer.range(of: Data([0x0A])) {
+            let lineData = buffer.subdata(in: buffer.startIndex..<range.lowerBound)
+            buffer.removeSubrange(buffer.startIndex..<range.upperBound)
+            if let line = String(data: lineData, encoding: .utf8),
+               !line.trimmingCharacters(in: .whitespaces).isEmpty {
+                lines.append(line)
+            }
+        }
+        return lines
+    }
+}
+
 // MARK: - BeadsEventsWatcher
 
-/// One instance per open workspace/window. Create as a `@StateObject` in the
-/// view that owns `workingDirectory` (IssueListView) so its lifetime tracks
-/// the view's lifetime.
+/// One instance per open workspace, owned by its WorkspaceStore (shared by every
+/// window showing that workspace), so its lifetime tracks the store's.
 @MainActor
 final class BeadsEventsWatcher: ObservableObject {
     /// Short unique ID for this instance, included in all log lines so multiple
@@ -95,7 +127,8 @@ final class BeadsEventsWatcher: ObservableObject {
     @Published var toastMessage: String? = nil
 
     private var process: Process?
-    private var stdoutBuffer = Data()
+    /// Consumes the current process's stdout lines on the main actor, in order.
+    private var lineConsumer: Task<Void, Never>?
     private var stderrBuffer = Data()
     private var workingDirectory: String = ""
     private var intentionallyStopped = false
@@ -105,8 +138,8 @@ final class BeadsEventsWatcher: ObservableObject {
     private var generation = 0
     private var consecutiveFailures = 0
     private let maxConsecutiveFailures = 3
-    private var debounceWorkItem: DispatchWorkItem?
-    private var onRefreshNeeded: (() -> Void)?
+    private var onEvent: ((JournalEvent) -> Void)?
+    private var onResync: (() -> Void)?
 
     /// Workspace paths already shown the "Live updates enabled" toast this app launch.
     /// In-memory only (not persisted), shared across all watcher instances/windows,
@@ -132,7 +165,12 @@ final class BeadsEventsWatcher: ObservableObject {
 
     /// Enable the events journal (fire-and-forget; failure is swallowed since the
     /// fallback path below handles it) and start tailing for the given workspace.
-    func start(workingDirectory: String, onRefreshNeeded: @escaping () -> Void) {
+    /// `onEvent` receives every journal record after the stored checkpoint, in seq order.
+    /// `onResync` fires when events were lost (journal truncated past the checkpoint), so
+    /// the consumer must re-read the workspace.
+    func start(workingDirectory: String,
+               onEvent: @escaping (JournalEvent) -> Void,
+               onResync: @escaping () -> Void) {
         // Check for an empty workspace path BEFORE tearing anything down. Diagnosed:
         // a spurious re-invocation of start() with an empty workingDirectory (e.g. from
         // a transient/stale value briefly reported by the caller) was previously calling
@@ -143,7 +181,8 @@ final class BeadsEventsWatcher: ObservableObject {
         guard !workingDirectory.isEmpty else { return }
         stop()  // tear down any previous process (different workspace / restart)
         self.workingDirectory = workingDirectory
-        self.onRefreshNeeded = onRefreshNeeded
+        self.onEvent = onEvent
+        self.onResync = onResync
         self.intentionallyStopped = false
         self.consecutiveFailures = 0
         let gen = generation
@@ -190,18 +229,16 @@ final class BeadsEventsWatcher: ObservableObject {
     /// change (start() calls this internally to tear down the previous workspace's
     /// process) to avoid leaking subprocesses.
     ///
-    /// NOT called from `.onDisappear` — SwiftUI can fire that on a transient view
-    /// teardown/recreate during initial layout, which would poison this persisted
-    /// @StateObject before its in-flight `start()` ever completes (diagnosed root
-    /// cause of the app always launching in "Manual" mode). True end-of-life cleanup
-    /// is instead handled by `deinit` below, which only fires on real deallocation,
-    /// and by IssueListView's window-close observer, which calls stop() directly.
+    /// NOT driven by `.onDisappear` — SwiftUI can fire that on a transient view
+    /// teardown/recreate during initial layout, which would stop the watcher before its
+    /// in-flight `start()` ever completes (diagnosed root cause of the app always
+    /// launching in "Manual" mode). WorkspaceStore calls stop() when the last window
+    /// showing its workspace closes or switches away; `deinit` below is a backstop, and
+    /// TailProcessRegistry covers app quit.
     func stop() {
         BTLog.log("[\(instanceID)] stop() called, workingDirectory=\(workingDirectory)", category: "events")
         intentionallyStopped = true
         generation += 1
-        debounceWorkItem?.cancel()
-        debounceWorkItem = nil
         terminateProcess()
         isLive = false
     }
@@ -221,6 +258,8 @@ final class BeadsEventsWatcher: ObservableObject {
         process?.terminationHandler = nil
         process?.terminate()
         process = nil
+        lineConsumer?.cancel()
+        lineConsumer = nil
         TailProcessRegistry.shared.unregister(instanceID)
     }
 
@@ -232,13 +271,9 @@ final class BeadsEventsWatcher: ObservableObject {
             return
         }
         let dir = workingDirectory
-        // TODO(shortcut): when there's no stored checkpoint yet for this workspace, we
-        // start from --since 0 and simply coalesce the (potentially large) history-replay
-        // burst into a single harmless refresh, rather than first issuing a separate
-        // "peek current head" call. This is an accepted v1 simplification (no cheap
-        // "get current head without --follow" command was assumed available) — the app
-        // already does one `bd list` on open today anyway, so the extra refresh is not
-        // harmful, just occasionally redundant.
+        // With no stored checkpoint we start from --since 0 and replay the journal (there's
+        // no cheap "current head" query). WorkspaceStore skips replayed events older than
+        // its baseline, so the replay costs decode time only.
         let since = Self.checkpoint(for: dir) ?? 0
         BTLog.log("[\(instanceID)] beginTailing dir=\(dir) since=\(since)", category: "events")
         spawnTailProcess(since: since)
@@ -261,16 +296,28 @@ final class BeadsEventsWatcher: ObservableObject {
         p.standardOutput = outPipe
         p.standardError = errPipe
 
-        stdoutBuffer = Data()
         stderrBuffer = Data()
 
         // Stream stdout incrementally (unlike other BeadsRunner calls which wait for
         // full completion) since --follow never terminates on its own.
-        outPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+        //
+        // Lines are split here, on the handle's own serial callback thread, and passed
+        // through an AsyncStream to a single main-actor consumer, which keeps them in
+        // order. (Hopping each chunk to the main actor with its own `Task` does not
+        // guarantee order: chunks were reassembled out of order, producing undecodable
+        // half-records — harmless while events were only refresh signals, but the store
+        // now applies each event's payload.)
+        let (lines, continuation) = AsyncStream<String>.makeStream()
+        let splitter = LineSplitter()
+        outPipe.fileHandleForReading.readabilityHandler = { handle in
             let chunk = handle.availableData
-            guard !chunk.isEmpty, let self else { return }
-            Task { @MainActor in
-                self.consumeChunk(chunk)
+            guard !chunk.isEmpty else { continuation.finish(); return }
+            for line in splitter.append(chunk) { continuation.yield(line) }
+        }
+        lineConsumer = Task { @MainActor [weak self] in
+            for await line in lines {
+                guard let self, !Task.isCancelled else { break }
+                self.handleLine(line)
             }
         }
         // Accumulate stderr (previously drained/discarded) so we can log it if the
@@ -305,18 +352,6 @@ final class BeadsEventsWatcher: ObservableObject {
         }
     }
 
-    private func consumeChunk(_ chunk: Data) {
-        stdoutBuffer.append(chunk)
-        // Split on newlines; keep any trailing partial line buffered until it completes.
-        while let range = stdoutBuffer.range(of: Data([0x0A])) {
-            let lineData = stdoutBuffer.subdata(in: stdoutBuffer.startIndex..<range.lowerBound)
-            stdoutBuffer.removeSubrange(stdoutBuffer.startIndex..<range.upperBound)
-            guard let line = String(data: lineData, encoding: .utf8),
-                  !line.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
-            handleLine(line)
-        }
-    }
-
     private func handleLine(_ line: String) {
         let data = Data(line.utf8)
 
@@ -327,17 +362,20 @@ final class BeadsEventsWatcher: ObservableObject {
             return
         }
 
-        guard let record = try? JSONDecoder().decode(EventRecord.self, from: data) else {
-            BTLog.log("handleLine: failed to decode as EventRecord or truncation error, raw line: \(line)", category: "events")
+        let event: JournalEvent
+        do {
+            event = try JSONDecoder().decode(JournalEvent.self, from: data)
+        } catch {
+            BTLog.log("handleLine: failed to decode as JournalEvent or truncation error (\(error)), raw line: \(line.prefix(300))", category: "events")
             return
         }
-        Self.setCheckpoint(record.seq, for: workingDirectory)
-        scheduleDebouncedRefresh()
+        Self.setCheckpoint(event.seq, for: workingDirectory)
+        onEvent?(event)
     }
 
     private func handleTruncation(_ trunc: EventsTruncationError) {
         showToast("Reconnected \u{2014} refreshing workspace")
-        onRefreshNeeded?()
+        onResync?()
 
         terminateProcess()
         isLive = false
@@ -380,15 +418,6 @@ final class BeadsEventsWatcher: ObservableObject {
             let since = Self.checkpoint(for: dir) ?? 0
             self.spawnTailProcess(since: since)
         }
-    }
-
-    private func scheduleDebouncedRefresh() {
-        debounceWorkItem?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            self?.onRefreshNeeded?()
-        }
-        debounceWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
     }
 
     private func maybeShowFirstEnableToast() {
