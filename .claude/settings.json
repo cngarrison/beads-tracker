@@ -1,0 +1,44 @@
+{
+  "hooks": {
+    "PreCompact": [
+      { "matcher": "", "hooks": [{ "type": "command", "command": "bd prime" }] }
+    ],
+    "SessionStart": [
+      { "matcher": "", "hooks": [{ "type": "command", "command": "bd prime" }] }
+    ]
+  },
+  "sandbox": {
+    "excludedCommands": ["bd"]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(bd prime)",
+      "Bash(bd ready:*)",
+      "Bash(bd list:*)",
+      "Bash(bd show:*)",
+      "Bash(bd search:*)",
+      "Bash(bd children:*)",
+      "Bash(bd blocked:*)",
+      "Bash(bd memories:*)",
+      "Bash(bd remember:*)",
+      "Bash(bd update:*)",
+      "Bash(bd create:*)",
+      "Bash(bd close:*)",
+      "Bash(bd reopen:*)",
+      "Bash(bd dep add:*)",
+      "Bash(make)",
+      "Bash(make clean)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git merge-base:*)",
+      "Bash(git branch --show-current)"
+    ],
+    "deny": [
+      "Bash(git push:*)",
+      "Bash(bd dolt push:*)"
+    ]
+  }
+}

@@ -10,3 +10,6 @@ BeadsTracker.app
 # BB support
 .trash
 notes
+# Claude Code
+.claude/worktrees/
+.claude/settings.local.json
