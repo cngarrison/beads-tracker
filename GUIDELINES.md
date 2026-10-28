@@ -45,6 +45,9 @@ for all non-trivial work; changes committed and pushed per the session completio
      run `git push` (git is not in the `execute` allow-list for this datasource anyway: `ls, pwd,
      cat, find, grep, rg, tree, head, tail, which, whereis, env, bd, make`). BB should still note
      when a session's changes are ready to be pushed, but must not attempt or claim to push.
+   - CNG pushes `main` by running `./scripts/release-version.sh`, which bumps the `Info.plist`
+     version, commits, tags `vX.Y.Z` and pushes; the tag triggers the GitHub Actions release
+     workflow. BB must not run the script or edit the `Info.plist` version itself.
    - `bd dolt push` (pushing the beads issue-tracker database itself) is a separate concern from
      app-code git push — see BEADS.md for the beads-specific push workflow.
 2. **Always run `make` after non-trivial Swift changes** to verify the build compiles (exit 0)
