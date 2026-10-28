@@ -8,14 +8,30 @@ on:
 jobs:
   build-sign-release:
     name: Build, Sign & Publish
-    runs-on: macos-14
+    runs-on: macos-26
     permissions:
       contents: write   # required to create GitHub Releases
+    env:
+      # Pinned to the Xcode used for local development, so CI compiles with the same Swift.
+      # Bump it together with local Xcode; the runner image's own default moves on its own.
+      XCODE_APP: /Applications/Xcode_26.3.app
 
     steps:
       # ── 1. Checkout ──────────────────────────────────────────────────────
       - name: Checkout
         uses: actions/checkout@v4
+
+      # ── 1b. Select the pinned Xcode ──────────────────────────────────────
+      - name: Select Xcode
+        run: |
+          if [ ! -d "$XCODE_APP" ]; then
+            echo "❌ $XCODE_APP is not installed on this runner image. Installed:"
+            ls -d /Applications/Xcode*.app
+            exit 1
+          fi
+          sudo xcode-select -s "$XCODE_APP/Contents/Developer"
+          xcodebuild -version
+          swiftc --version
 
       # ── 2. Verify tag matches Info.plist version ──────────────────────────
       - name: Verify version consistency
