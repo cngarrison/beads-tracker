@@ -321,7 +321,8 @@ final class WorkspaceStore: ObservableObject {
                           deferUntil: r.deferUntil,
                           children: nil,
                           description: r.description,
-                          notes: r.notes)
+                          notes: r.notes,
+                          createdAt: r.createdAt)
     }
 
     // MARK: Detail

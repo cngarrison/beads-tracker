@@ -62,7 +62,7 @@ Prefer to build it yourself? See [Build & run](#build--run) below.
 # Clone or download this repo, then:
 cd beads-tracker
 
-make          # compiles BeadsTracker.swift → BeadsTracker.app
+make          # compiles the .swift files → BeadsTracker.app
 make run      # compiles + opens the app
 make clean    # removes BeadsTracker.app
 ```
@@ -94,7 +94,7 @@ Click **Choose…** in the top bar and navigate to any directory that contains a
 
 ![Create tab](beads-tracker-create.png)
 
-Switch to the **Create** tab. Fill in at minimum the **Title** field (marked `*`), then press **Create Issue** or hit `⌘↵`.
+Click **Create** in the top bar. Fill in at minimum the **Title** field (marked `*`), then press **Create Issue** or hit `⌘↵`.
 
 On success, a green banner appears showing the new issue ID (e.g. `bd-abc`). Click **Copy ID** to put it on the clipboard. The form clears automatically, ready for the next issue.
 
@@ -117,7 +117,11 @@ Field reference:
 
 ![Issues tab](beads-tracker-issues.png)
 
-Switch to the **Issues** tab. The list loads automatically when you switch tabs or change the working directory. Click **Refresh** (↺) to reload. Click any row to copy its ID to the clipboard.
+The list loads when you choose a repository and then updates live as issues change (the **Live** indicator), re-reading from `bd` every few minutes. Click **Refresh** (↺, `⌘R`) to re-read now.
+
+- **Filter** by status, priority and type, and **sort** by priority, last modified or created date. Epics expand to show their children, which are sorted the same way.
+- **Search** (`⌘F`) by title, description, notes, all three (**All Content**) or ID.
+- Select issues to see them in the detail panel; the pencil button on a card edits that issue.
 
 ---
 
@@ -137,15 +141,20 @@ Then restart Beads Tracker. If `bd` is still not found, the app will display the
 
 ```
 beads-tracker/
+├── ContentView.swift        # App entry point (@main), window, top bar, project picker
+├── Models.swift             # Data models, date helpers, draft manager, app delegate
 ├── BeadsRunner.swift        # CLI subprocess layer (bd commands)
-├── BeadsTrackerModels.swift # Data models and types
-├── BeadsTrackerApp.swift    # App entry point and main window
-├── CreateIssueView.swift    # Create tab UI
-├── IssueListView.swift      # Issues tab UI
+├── BeadsEventsWatcher.swift # `bd events tail` subprocess for live updates
+├── WorkspaceStore.swift     # Shared in-memory copy of a workspace's issues
+├── CreateIssueView.swift    # Create sheet UI
+├── IssueListView.swift      # Issue list, detail panel, edit sheet
+├── BTLog.swift              # Diagnostic log file
 ├── Info.plist               # App bundle metadata
 ├── Makefile                 # Build + icon pipeline
 ├── BeadsTracker.svg         # App icon source
 └── README.md
+
+See CONTRIBUTING.md for the full layout, including the release workflow and scripts.
 ```
 
 There is no Xcode project, no Swift Package Manager manifest, no third-party dependencies. `swiftc` compiles all source files directly into an `.app` bundle — the entire build is a single `swiftc` invocation in the `Makefile`. This minimal footprint is a deliberate design goal, not an oversight: keeping the codebase small and dependency-free means an AI coding agent (or a new human contributor) can read the whole project in one pass and ship a change without first onboarding onto a large build system.

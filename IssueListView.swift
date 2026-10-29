@@ -33,7 +33,15 @@ enum SearchScope: String, CaseIterable {
     case title       = "Title"
     case description = "Description"
     case notes       = "Notes"
+    case all         = "All Content"   // Title, Description or Notes
     case id          = "ID"
+}
+
+/// Order of the Issues list. Children are ordered the same way under their parent.
+enum IssueSort: String, CaseIterable {
+    case priority = "Priority"        // bd list's order: priority, then newest created
+    case updated  = "Last Modified"   // most recent change in the issue or a visible descendant
+    case created  = "Created"         // newest first
 }
 
 /// Comments fetched for one issue, and the issue's `updated_at` at the time.
@@ -79,6 +87,8 @@ struct IssueListView: View {
     @State private var selectedTypes:      Set<String> = ["bug", "feature", "task", "epic", "chore", "decision"]
     @State private var titleSearch: String = ""
     @State private var searchScope: SearchScope = .title
+    @SceneStorage("issueSort") private var issueSort: IssueSort = .priority
+    @FocusState private var searchFocused: Bool
     
     // Expanded state: computed property works fine with DisclosureGroup
     private var expandedIDs: Set<String> {
@@ -111,8 +121,47 @@ struct IssueListView: View {
         case .title:       return issue.title.localizedCaseInsensitiveContains(q)
         case .description: return issue.description?.localizedCaseInsensitiveContains(q) ?? false
         case .notes:       return issue.notes?.localizedCaseInsensitiveContains(q) ?? false
+        case .all:         return issue.title.localizedCaseInsensitiveContains(q)
+                               || issue.description?.localizedCaseInsensitiveContains(q) == true
+                               || issue.notes?.localizedCaseInsensitiveContains(q) == true
         case .id:          return true
         }
+    }
+
+    /// The store's list is already in `.priority` order. bd's timestamps are fixed-width UTC
+    /// (`2026-10-28T04:38:16Z`), so comparing the strings compares the times.
+    private func sortedForDisplay(_ flat: [BeadsIssue]) -> [BeadsIssue] {
+        func newestFirst(_ key: (BeadsIssue) -> String) -> [BeadsIssue] {
+            flat.sorted { a, b in
+                let ka = key(a), kb = key(b)
+                return ka != kb ? ka > kb : a.id < b.id
+            }
+        }
+        switch issueSort {
+        case .priority: return flat
+        case .updated:
+            let latest = latestVisibleChange(flat)
+            return newestFirst { latest[$0.id] ?? $0.updatedAt }
+        case .created:  return newestFirst { $0.createdAt ?? "" }
+        }
+    }
+
+    /// For Last Modified: each issue's newest `updatedAt` among itself and its descendants in
+    /// `flat` (the filtered list), so an epic rises when a visible child changes. Hidden
+    /// children don't count, so the order always matches what's on screen.
+    private func latestVisibleChange(_ flat: [BeadsIssue]) -> [String: String] {
+        var children: [String: [BeadsIssue]] = [:]
+        for issue in flat { if let p = issue.parentID { children[p, default: []].append(issue) } }
+        var latest: [String: String] = [:]
+        func visit(_ issue: BeadsIssue) -> String {
+            if let known = latest[issue.id] { return known }
+            latest[issue.id] = issue.updatedAt   // guards against a parent cycle
+            let newest = (children[issue.id] ?? []).map(visit).reduce(issue.updatedAt, max)
+            latest[issue.id] = newest
+            return newest
+        }
+        flat.forEach { _ = visit($0) }
+        return latest
     }
 
     // Copy details toolbar feedback
@@ -210,6 +259,7 @@ struct IssueListView: View {
         .onChange(of: selectedPriorities) { _ in applyLocalFilters() }
         .onChange(of: selectedTypes)      { _ in applyLocalFilters() }
         .onChange(of: titleSearch)        { _ in applyLocalFilters() }
+        .onChange(of: issueSort)          { _ in applyLocalFilters() }
         .onChange(of: selectedIDs) { newSelection in
             // Persist selection to SceneStorage
             selectedIDsJSON = encodeIDSet(newSelection)
@@ -291,6 +341,8 @@ struct IssueListView: View {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
             .buttonStyle(.bordered).controlSize(.small)
+            .keyboardShortcut("r", modifiers: .command)
+            .help("Re-read all issues (\u{2318}R)")
             .disabled(store == nil || store?.isLoading == true)
         }
         .padding(.horizontal).padding(.vertical, 8)
@@ -509,7 +561,7 @@ struct IssueListView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(panelContents, id: \.id) { detail in
-                            IssueDetailCard(detail: detail)
+                            IssueDetailCard(detail: detail, onEdit: { editFromPanel(detail.id) })
                             if detail.id != panelContents.last?.id {
                                 Divider().padding(.vertical, 4)
                             }
@@ -528,6 +580,7 @@ struct IssueListView: View {
             StatusFilterMenu(selectedStatuses: $selectedStatuses)
             PriorityFilterMenu(selectedPriorities: $selectedPriorities)
             TypeFilterMenu(selectedTypes: $selectedTypes)
+            SortMenu(sort: $issueSort)
             Spacer()
             HStack(spacing: 0) {
                 // Leading separator to visually separate from left-side filter menus
@@ -554,6 +607,7 @@ struct IssueListView: View {
                     TextField("Search\u{2026}", text: $titleSearch)
                         .textFieldStyle(.plain)
                         .font(.subheadline)
+                        .focused($searchFocused)
                     if !titleSearch.isEmpty {
                         Button { titleSearch = "" } label: {
                             Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
@@ -569,6 +623,13 @@ struct IssueListView: View {
         .padding(.horizontal, 12)
         .frame(height: 34)
         .background(.bar)
+        .background {
+            // ⌘F focuses the search field (a keyboard shortcut needs a button to hang on)
+            Button("Find") { searchFocused = true }
+                .keyboardShortcut("f", modifiers: .command)
+                .opacity(0).frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        }
     }
 
     // MARK: - Helpers
@@ -612,6 +673,12 @@ struct IssueListView: View {
         }
         try? await Task.sleep(nanoseconds: 2_000_000_000)
         await MainActor.run { showCopied = false }
+    }
+
+    /// Opens the edit sheet for a detail-panel card. Looked up in the store so it works for any
+    /// selected issue, including one the current filters have since hidden.
+    private func editFromPanel(_ id: String) {
+        if let issue = workspace.issues.first(where: { $0.id == id }) { editIssue = issue }
     }
 
     /// Shows the selected issues from the store at once, then fetches comments in the
@@ -763,7 +830,7 @@ struct IssueListView: View {
     /// value that's about to be published) and prunes persisted selection/expansion to the
     /// IDs still shown. Cheap (in-memory), so it runs on every filter edit and store update.
     private func applyLocalFilters(_ flat: [BeadsIssue]? = nil) {
-        var tree = BeadsRunner.buildTree((flat ?? workspace.issues).filter(passesLocalFilters))
+        var tree = BeadsRunner.buildTree(sortedForDisplay((flat ?? workspace.issues).filter(passesLocalFilters)))
 
         // Client-side filtering for `.id` scope matches on the tree so that matching
         // children keep their ancestors.
@@ -965,6 +1032,28 @@ private struct IssueRowSlot<Row: View>: View, Equatable {
     var body: some View { row(issue) }
 }
 
+// MARK: - Sort Menu
+
+private struct SortMenu: View {
+    @Binding var sort: IssueSort
+
+    var body: some View {
+        Menu {
+            Picker("Sort By", selection: $sort) {
+                ForEach(IssueSort.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Label(sort.rawValue, systemImage: "arrow.up.arrow.down")
+                .font(.subheadline)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .controlSize(.regular)
+        .help("Sort the list (children are sorted within their parent)")
+    }
+}
+
 // MARK: - Status Filter Menu
 
 private struct StatusFilterMenu: View {
@@ -1129,6 +1218,7 @@ private struct TypeFilterMenu: View {
 
 struct IssueDetailCard: View {
     let detail: BeadsIssueDetail
+    var onEdit: (() -> Void)? = nil
     @State private var isHoveringID = false
     
     private func dueColor(from isoString: String) -> Color {
@@ -1185,6 +1275,13 @@ struct IssueDetailCard: View {
                             .background(Color(nsColor: .controlBackgroundColor), in: Capsule())
                     }
                     Spacer()
+                    if let onEdit {
+                        Button(action: onEdit) {
+                            Image(systemName: "pencil")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Edit \(detail.id)")
+                    }
                 }
                 Text(detail.title)
                     .font(.headline)

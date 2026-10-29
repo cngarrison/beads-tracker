@@ -125,6 +125,7 @@ struct BeadsIssue: Identifiable, Equatable {
     var children: [BeadsIssue]?   // nil = leaf node
     var description: String? = nil  // for local Description search
     var notes: String? = nil        // for local Notes search
+    var createdAt: String? = nil    // ISO8601, for the Created sort
 
     var statusSymbol: String {
         switch status {
