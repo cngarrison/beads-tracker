@@ -1,6 +1,6 @@
 # Beads Tracker
 
-A native macOS app for creating and viewing issues in the [beads](https://github.com/gastownhall/beads/) (`bd`) issue tracking system — no CLI required.
+A native macOS app for creating, browsing and managing issues in the [beads](https://github.com/gastownhall/beads/) (`bd`) issue tracking system — no CLI required. It stays fast and live on large workspaces, with a thousand issues and many agents working at once.
 
 **Repository:** [github.com/cngarrison/beads-tracker](https://github.com/cngarrison/beads-tracker) · **Author:** [@cngarrison](https://github.com/cngarrison)
 
@@ -12,8 +12,8 @@ A native macOS app for creating and viewing issues in the [beads](https://github
 
 <table>
   <tr>
-    <td align="center"><strong>Create tab</strong></td>
-    <td align="center"><strong>Issues tab</strong></td>
+    <td align="center"><strong>Create an issue</strong></td>
+    <td align="center"><strong>Browse issues</strong></td>
   </tr>
   <tr>
     <td><img src="beads-tracker-create.png" alt="Create tab" width="480"/></td>
@@ -25,13 +25,15 @@ A native macOS app for creating and viewing issues in the [beads](https://github
 
 ## What it does
 
-`bd` is a powerful local-first issue tracker, but its interface is the terminal. Beads Tracker wraps the most common workflows in a clean SwiftUI window:
+`bd` is a powerful local-first issue tracker, but its interface is the terminal. Beads Tracker gives it a native SwiftUI window:
 
-- **Create issues** via a form that mirrors `bd create-form` — title, description, type, priority, assignee, labels, external reference, design notes, acceptance criteria, and dependencies
-- **Browse open issues** in a live list with status indicators, priority badges, and one-click ID copying
-- **Persistent repo selection** — pick your beads working directory once and it's remembered across launches
-- **Multi-window** — open a separate window per project/repo, each with its own working directory and issue list
-- **Works with embedded or server-mode Dolt** — no special configuration needed; the app just shells out to `bd`, so it follows whatever storage mode your project is already using
+- **Fast on large workspaces.** Each workspace is read once into memory and then kept up to date, so filtering, searching and sorting are instant, with no `bd` call per keystroke. Lists of a thousand issues stay responsive while agents create and update issues around you.
+- **Live.** Changes from anyone, including your agents, appear as they happen, using `bd`'s events journal (the **Live** indicator). The list is also re-read in the background every few minutes, to pick up changes the journal doesn't record such as `bd dolt pull`, and it stays on screen while it refreshes.
+- **Browse the whole tree.** Epics expand to show their children. Filter by status, priority and type; sort by priority, last modified (an epic rises when its visible children change) or created date; search by title, description, notes, all three, or ID.
+- **See and act on issues.** Select one or many (click, ⌘-click, Shift-click) to see them in the detail panel, with description, design, acceptance criteria, notes, comments, dependencies and children. Claim, close or change status, edit fields, due and defer dates, add comments, or copy issues as Markdown.
+- **Create issues** with a form that mirrors `bd create-form`: title, description, type, priority, assignee, labels, external reference, design notes, acceptance criteria and dependencies. An unsaved form is kept as a draft, and quitting asks before discarding it.
+- **Multi-window.** Open a window per project, each with its own repository, filters and selection. Windows on the same repository share one in-memory copy, and recent repositories are a click away.
+- **Works with embedded or server-mode Dolt.** No special configuration: the app shells out to `bd`, so it follows whatever storage mode your project already uses.
 
 ---
 
@@ -96,7 +98,7 @@ Click **Choose…** in the top bar and navigate to any directory that contains a
 
 Click **Create** in the top bar. Fill in at minimum the **Title** field (marked `*`), then press **Create Issue** or hit `⌘↵`.
 
-On success, a green banner appears showing the new issue ID (e.g. `bd-abc`). Click **Copy ID** to put it on the clipboard. The form clears automatically, ready for the next issue.
+On success, a green banner shows the new issue ID (e.g. `bd-abc`), with **Copy ID** to put it on the clipboard.
 
 Field reference:
 
@@ -121,7 +123,10 @@ The list loads when you choose a repository and then updates live as issues chan
 
 - **Filter** by status, priority and type, and **sort** by priority, last modified or created date. Epics expand to show their children, which are sorted the same way.
 - **Search** (`⌘F`) by title, description, notes, all three (**All Content**) or ID.
-- Select issues to see them in the detail panel; the pencil button on a card edits that issue.
+- **Select** issues (click, ⌘-click, Shift-click or drag) to see them in the detail panel. The pencil button on a card, or a double-click on a row, edits that issue. With one issue selected, the panel's toolbar also has a status menu and copy actions.
+- **Right-click** a row to claim or close it, view its full detail, or copy its ID, title or details as Markdown.
+
+Live updates use `bd`'s events journal, which the app turns on for each repository it opens (`bd config set events-journal true`).
 
 ---
 
@@ -220,12 +225,11 @@ For teams using `beads` for issue tracking, this pattern — *describe what you 
 
 Some features on the roadmap (tracked in this repo's beads database):
 
-- **Issue detail view** — double-click a row to see the full `bd show <id>` output in a sheet
-- **Close / complete issues** — `bd close <id>` button from the detail view
-- **In-progress / claim** — `bd update <id> --claim`
-- **Filter & search** — filter the issues list by status, priority, type, or label
-- **Custom types** — read `.beads/config.yaml` to discover project-specific issue types
-- **Multi-repo support** — pin multiple repositories and switch between them
+- **Custom types** — read the project's beads config to offer project-specific issue types
+- **Label filter**, and **grouping** the list by type, status or label
+- **Create child issues** from the detail view
+- **Dependency graph** — a visual view of what blocks what
+- **Menu bar extra** for quick issue creation, and **Open in Terminal** for the selected repository
 
 Contributions welcome — or just describe what you want to [Beyond Better](https://BeyondBetter.app) and send a PR.
 
