@@ -180,7 +180,14 @@ struct IssueListView: View {
     /// Comments per issue from `bd show` (`bd list` has none), with the `updated_at` they were
     /// fetched at; refetched when the store's copy of the issue moves on (a comment updates it).
     @State private var panelComments: [String: FetchedComments] = [:]
+    /// Comment fetches run only for cards on screen (LazyVStack onAppear/onDisappear), at most
+    /// `maxCommentFetches` `bd show` at a time; selecting dozens of issues would otherwise start
+    /// dozens of `bd` processes and rebuild the panel once per result.
+    @State private var visibleCardIDs: Set<String> = []
+    @State private var commentQueue: [String] = []
     @State private var commentFetches: Set<String> = []
+    @State private var panelRefreshPending = false
+    private static let maxCommentFetches = 4
     /// The `bd show` fallback used before the store loads; cancelled once the store can serve.
     @State private var panelFallbackTask: Task<Void, Never>? = nil
     @FocusState private var listFocused: Bool
@@ -431,6 +438,11 @@ struct IssueListView: View {
                 }
                 Spacer()
 
+                if !commentFetches.isEmpty || !commentQueue.isEmpty {
+                    ProgressView().scaleEffect(0.5).frame(width: 16, height: 16)
+                        .help("Loading comments\u{2026}")
+                }
+
                 // Status change feedback
                 if isChangingStatus {
                     ProgressView().scaleEffect(0.7).padding(.trailing, 2)
@@ -567,6 +579,14 @@ struct IssueListView: View {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(panelContents, id: \.id) { detail in
                             IssueDetailCard(detail: detail, onEdit: { openEditor(for: detail.id) })
+                                .onAppear {
+                                    visibleCardIDs.insert(detail.id)
+                                    requestComments(detail.id)
+                                }
+                                .onDisappear {
+                                    visibleCardIDs.remove(detail.id)
+                                    commentQueue.removeAll { $0 == detail.id }
+                                }
                             if detail.id != panelContents.last?.id {
                                 Divider().padding(.vertical, 4)
                             }
@@ -686,8 +706,8 @@ struct IssueListView: View {
         if let issue = workspace.issues.first(where: { $0.id == id }) { editIssue = issue }
     }
 
-    /// Shows the selected issues from the store at once, then fetches comments in the
-    /// background where missing or stale. Falls back to `bd show` for issues the store
+    /// Shows the selected issues from the store at once, then fetches comments for the cards
+    /// on screen where missing or stale. Falls back to `bd show` for issues the store
     /// doesn't have yet (first load still running).
     private func refreshPanel() {
         let ids = Array(selectedIDs)
@@ -705,26 +725,60 @@ struct IssueListView: View {
         let details = ids.compactMap { store.detail(for: $0, comments: panelComments[$0]?.comments) }
         panelContents = details
 
+        for detail in details where visibleCardIDs.contains(detail.id) {
+            requestComments(detail.id)
+        }
+    }
+
+    /// Whether the panel's copy of an issue's comments is missing or older than the store's
+    /// issue (a new comment bumps updated_at). Strictly newer: equal never refetches, so the
+    /// fetch → refresh cycle can't loop.
+    private func commentsAreStale(_ id: String) -> Bool {
+        guard let fetched = panelComments[id] else { return true }
+        guard let current = store?.detail(for: id, comments: nil) else { return false }
+        return current.updatedAt > fetched.updatedAt
+    }
+
+    /// Queues a comment fetch for a card on screen, if needed and not already queued/running.
+    private func requestComments(_ id: String) {
+        guard commentsAreStale(id), !commentFetches.contains(id), !commentQueue.contains(id) else { return }
+        commentQueue.append(id)
+        startCommentFetches()
+    }
+
+    /// Starts queued fetches up to the limit, skipping cards that have left the screen (rapid
+    /// selection changes leave stale entries behind).
+    private func startCommentFetches() {
         // The attached store's path, not `workingDirectory`: this can run from an onChange
         // closure, whose struct copy still holds the previous directory (GUIDELINES #5).
-        let dir = store.path
-        // Fetch when never fetched, or when the store's copy is strictly newer than the fetch
-        // (strictly: equal or older never refetches, so this can't loop).
-        for detail in details
-        where (panelComments[detail.id].map { detail.updatedAt > $0.updatedAt } ?? true)
-            && !commentFetches.contains(detail.id) {
-            let id = detail.id
+        guard let dir = store?.path else { return }
+        while commentFetches.count < Self.maxCommentFetches, !commentQueue.isEmpty {
+            let id = commentQueue.removeFirst()
+            guard visibleCardIDs.contains(id), commentsAreStale(id) else { continue }
             commentFetches.insert(id)
             Task {
                 let fetched = try? await Task.detached(priority: .userInitiated) {
                     try BeadsRunner.showDetail(id: id, workingDirectory: dir)
                 }.value
                 commentFetches.remove(id)
-                guard let fetched else { return }
-                panelComments[id] = FetchedComments(updatedAt: fetched.updatedAt,
-                                                    comments: fetched.comments ?? [])
-                refreshPanel()
+                if let fetched {
+                    panelComments[id] = FetchedComments(updatedAt: fetched.updatedAt,
+                                                        comments: fetched.comments ?? [])
+                    schedulePanelRefresh()
+                }
+                startCommentFetches()
             }
+        }
+    }
+
+    /// Coalesces fetch results into one panel rebuild instead of one per result.
+    private func schedulePanelRefresh() {
+        guard !panelRefreshPending else { return }
+        panelRefreshPending = true
+        Task {
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            panelRefreshPending = false
+            refreshPanel()
         }
     }
 
