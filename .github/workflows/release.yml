@@ -20,6 +20,8 @@ jobs:
       # ── 1. Checkout ──────────────────────────────────────────────────────
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history and tags, for the release notes since the previous tag
 
       # ── 1b. Select the pinned Xcode ──────────────────────────────────────
       - name: Select Xcode
@@ -164,10 +166,18 @@ jobs:
           hdiutil detach "$MOUNT" -quiet
 
       # ── 9. Publish GitHub Release ─────────────────────────────────────────
+      # Notes come from the commits since the previous tag (work is merged locally, not via
+      # PRs, so GitHub's generated notes have only the "Full Changelog" link, kept below them).
+      - name: Write release notes
+        run: |
+          ./scripts/release-notes.sh "$GITHUB_REF_NAME" > "$RUNNER_TEMP/release-notes.md"
+          cat "$RUNNER_TEMP/release-notes.md"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ env.DMG_NAME }}
+          body_path: ${{ runner.temp }}/release-notes.md
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

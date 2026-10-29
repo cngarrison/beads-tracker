@@ -94,7 +94,9 @@ Key resources:
   wrapper methods), `BeadsEventsWatcher.swift` (real-time `bd events tail` sync),
   `WorkspaceStore.swift` (shared per-workspace in-memory issue store, patched from events)
 - **Build/config:** `Makefile`, `Info.plist`, `BeadsTracker.entitlements`, `.github/` (release
-  workflow), `scripts/` (release-version.sh)
+  workflow), `scripts/` (release-version.sh, release-notes.sh: GitHub release notes built from
+  the commit messages since the previous tag, so commits should use `feat:`/`fix:`/`perf:`/`ci:`/
+  `docs:` prefixes and describe the change for a release-notes reader)
 - **Docs:** `README.md`, `ROADMAP.md`, `CONTRIBUTING.md`, `BEADS.md`, `NEW_PROJECT_SETUP.md` (BB
   guidelines template, not app-specific), this `GUIDELINES.md`
 - **Assets:** `BeadsTracker.svg`/`.icns`/`.png`, screenshots (`beads-tracker-create.png`,
