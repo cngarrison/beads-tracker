@@ -404,6 +404,11 @@ struct IssueListView: View {
                 }
             }
             .listStyle(.plain)
+            // Double-click (or Return) on a single selected row edits it; rows keep their own
+            // context menus.
+            .contextMenu(forSelectionType: String.self, menu: { _ in }, primaryAction: { ids in
+                if ids.count == 1, let id = ids.first { openEditor(for: id) }
+            })
             .focused($listFocused)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -561,7 +566,7 @@ struct IssueListView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(panelContents, id: \.id) { detail in
-                            IssueDetailCard(detail: detail, onEdit: { editFromPanel(detail.id) })
+                            IssueDetailCard(detail: detail, onEdit: { openEditor(for: detail.id) })
                             if detail.id != panelContents.last?.id {
                                 Divider().padding(.vertical, 4)
                             }
@@ -675,9 +680,9 @@ struct IssueListView: View {
         await MainActor.run { showCopied = false }
     }
 
-    /// Opens the edit sheet for a detail-panel card. Looked up in the store so it works for any
-    /// selected issue, including one the current filters have since hidden.
-    private func editFromPanel(_ id: String) {
+    /// Opens the edit sheet for an issue (detail-panel card, or double-click in the list). Looked
+    /// up in the store so it works for any selected issue, including one filtered out since.
+    private func openEditor(for id: String) {
         if let issue = workspace.issues.first(where: { $0.id == id }) { editIssue = issue }
     }
 
@@ -892,25 +897,6 @@ struct IssueListView: View {
                          ids = [issue.id]
                      }
                      Task { await copyDetailsAsMarkdown(ids: ids) }
-                 },
-                 onSelect: {
-                     let cmdHeld = NSEvent.modifierFlags.contains(.command)
-                     if cmdHeld {
-                         if selectedIDs.contains(issue.id) {
-                             var newSelection = selectedIDs
-                             if newSelection.contains(issue.id) {
-                                 newSelection.remove(issue.id)
-                             } else {
-                                 newSelection.insert(issue.id)
-                             }
-                             selectedIDs = newSelection
-                         } else {
-                             selectedIDs.remove(issue.id)
-                         }
-                     } else {
-                         selectedIDs = [issue.id]
-                     }
-                     listFocused = true
                  })
     }
     
@@ -1758,7 +1744,6 @@ struct IssueRow: View {
     var onClaim: () -> Void = {}
     var onClose: () -> Void = {}
     var onCopyDetails: () -> Void = {}
-    var onSelect: () -> Void = {}
 
     var body: some View {
         HStack(spacing: 10) {
@@ -1803,14 +1788,12 @@ struct IssueRow: View {
                 .foregroundStyle(.secondary)
         }
         .contentShape(Rectangle())
-        .onTapGesture(count: 2) { onEdit() }
-        .onTapGesture {
-            if showDetailPanel {
-                onSelect()
-            } else {
-                copyID()
-            }
-        }
+        // With the detail panel shown, the row has no tap gestures so the List's own selection
+        // (click, ⌘-click, Shift-click, drag) works; double-click edits via the List's
+        // primaryAction. A tap gesture here swallows those clicks. With the panel hidden,
+        // clicking copies the ID and double-clicking edits.
+        .gesture(TapGesture(count: 2).onEnded { onEdit() }, including: showDetailPanel ? .subviews : .all)
+        .gesture(TapGesture().onEnded { copyID() }, including: showDetailPanel ? .subviews : .all)
         .contextMenu {
             Button("Edit\u{2026}") { onEdit() }
             Button("View Detail") { onShowDetail() }
