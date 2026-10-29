@@ -126,6 +126,7 @@ BeadsTracker.svg           ── App icon source (edit to change the icon)
 .githooks/                 ── post-merge / pre-push hooks that sync the issue database
 .github/workflows/         ── release.yml: build, sign, notarize and publish on version tags
 scripts/release-version.sh ── Bump version, tag and push a release
+scripts/release-notes.sh   ── Release notes from the commits since the previous tag
 README.md                  ── User-facing docs
 ROADMAP.md                 ── Feature ideas and backlog
 BEADS.md                   ── Quick reference for agents using `bd` in this repo
@@ -189,7 +190,13 @@ Releases are cut from `main` with the release script, which replaces a plain `gi
 
 From a clean working tree, the script bumps `CFBundleShortVersionString` and `CFBundleVersion` in `Info.plist`, commits that as `chore: bump version to X.Y.Z (build N)`, creates an annotated `vX.Y.Z` tag and pushes the commit and the tag to `origin`.
 
-The tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which checks the tag matches `Info.plist`, builds a universal binary, signs it with the Developer ID certificate, packages and notarizes a DMG, and publishes it as a GitHub Release with generated notes.
+The tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which checks the tag matches `Info.plist`, builds a universal binary, signs it with the Developer ID certificate, packages and notarizes a DMG, and publishes it as a GitHub Release.
+
+The release notes are built by [`scripts/release-notes.sh`](scripts/release-notes.sh) from the commits since the previous `v*` tag: one entry per commit, grouped by its prefix (`feat:`, `fix:`, `perf:`, `ci:`/`build:`, `docs:`, anything else under "Other changes"), with the commit message body as the detail. Merge commits and version bumps are skipped. Because changes are squashed into commits that each describe one change, write those messages for a reader of the release notes: a subject that names the change, and a body that says what changed and why. To preview the next release's notes:
+
+```bash
+./scripts/release-notes.sh HEAD
+```
 
 ---
 

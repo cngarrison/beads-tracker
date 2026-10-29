@@ -16,7 +16,7 @@ no database or API layer of its own. The project tracks its own development in `
   `BeadsEventsWatcher.swift` (real-time sync via `bd events tail`), `WorkspaceStore.swift`
   (shared per-workspace in-memory issue store, patched from events), `BTLog.swift`
 - **Build/config:** `Makefile`, `Info.plist`, `BeadsTracker.entitlements`, `.github/` (release
-  workflow), `scripts/release-version.sh`, `.githooks/`
+  workflow), `scripts/release-version.sh`, `scripts/release-notes.sh`, `.githooks/`
 - **Docs:** `README.md`, `ROADMAP.md`, `CONTRIBUTING.md` (keep its project layout and conventions
   in step with the code), `BEADS.md`
 
@@ -90,7 +90,9 @@ Do this only when asked, one branch at a time:
 2. **Rebase onto local `main`**: `git rebase main <branch>`. Note the resulting tip.
 3. **Squash** into a few commits that each describe a change: `git reset --soft main`, then
    `git reset` and re-commit in groups with `git add`. Messages describe each change as a whole
-   (what and why); keep bead ids and Co-Authored-By trailers.
+   (what and why); keep bead ids and Co-Authored-By trailers. Each commit becomes an entry in the
+   GitHub release notes (`scripts/release-notes.sh`), grouped by its `feat:`/`fix:`/`perf:`/
+   `ci:`/`docs:` prefix, so use a prefix and write the subject and body for that reader.
 4. **Verify** nothing was lost: `git diff <tip from step 2> <branch>` must be empty; re-run `make`
    if `main` had moved.
 5. **Merge** with a merge commit: `git switch main && git merge --no-ff <branch>`. If the branch
