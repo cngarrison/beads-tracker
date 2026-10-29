@@ -33,7 +33,15 @@ enum SearchScope: String, CaseIterable {
     case title       = "Title"
     case description = "Description"
     case notes       = "Notes"
+    case all         = "All Content"   // Title, Description or Notes
     case id          = "ID"
+}
+
+/// Order of the Issues list. Children are ordered the same way under their parent.
+enum IssueSort: String, CaseIterable {
+    case priority = "Priority"        // bd list's order: priority, then newest created
+    case updated  = "Last Modified"   // most recent change in the issue or a visible descendant
+    case created  = "Created"         // newest first
 }
 
 /// Comments fetched for one issue, and the issue's `updated_at` at the time.
@@ -79,6 +87,8 @@ struct IssueListView: View {
     @State private var selectedTypes:      Set<String> = ["bug", "feature", "task", "epic", "chore", "decision"]
     @State private var titleSearch: String = ""
     @State private var searchScope: SearchScope = .title
+    @SceneStorage("issueSort") private var issueSort: IssueSort = .priority
+    @FocusState private var searchFocused: Bool
     
     // Expanded state: computed property works fine with DisclosureGroup
     private var expandedIDs: Set<String> {
@@ -111,8 +121,47 @@ struct IssueListView: View {
         case .title:       return issue.title.localizedCaseInsensitiveContains(q)
         case .description: return issue.description?.localizedCaseInsensitiveContains(q) ?? false
         case .notes:       return issue.notes?.localizedCaseInsensitiveContains(q) ?? false
+        case .all:         return issue.title.localizedCaseInsensitiveContains(q)
+                               || issue.description?.localizedCaseInsensitiveContains(q) == true
+                               || issue.notes?.localizedCaseInsensitiveContains(q) == true
         case .id:          return true
         }
+    }
+
+    /// The store's list is already in `.priority` order. bd's timestamps are fixed-width UTC
+    /// (`2026-10-28T04:38:16Z`), so comparing the strings compares the times.
+    private func sortedForDisplay(_ flat: [BeadsIssue]) -> [BeadsIssue] {
+        func newestFirst(_ key: (BeadsIssue) -> String) -> [BeadsIssue] {
+            flat.sorted { a, b in
+                let ka = key(a), kb = key(b)
+                return ka != kb ? ka > kb : a.id < b.id
+            }
+        }
+        switch issueSort {
+        case .priority: return flat
+        case .updated:
+            let latest = latestVisibleChange(flat)
+            return newestFirst { latest[$0.id] ?? $0.updatedAt }
+        case .created:  return newestFirst { $0.createdAt ?? "" }
+        }
+    }
+
+    /// For Last Modified: each issue's newest `updatedAt` among itself and its descendants in
+    /// `flat` (the filtered list), so an epic rises when a visible child changes. Hidden
+    /// children don't count, so the order always matches what's on screen.
+    private func latestVisibleChange(_ flat: [BeadsIssue]) -> [String: String] {
+        var children: [String: [BeadsIssue]] = [:]
+        for issue in flat { if let p = issue.parentID { children[p, default: []].append(issue) } }
+        var latest: [String: String] = [:]
+        func visit(_ issue: BeadsIssue) -> String {
+            if let known = latest[issue.id] { return known }
+            latest[issue.id] = issue.updatedAt   // guards against a parent cycle
+            let newest = (children[issue.id] ?? []).map(visit).reduce(issue.updatedAt, max)
+            latest[issue.id] = newest
+            return newest
+        }
+        flat.forEach { _ = visit($0) }
+        return latest
     }
 
     // Copy details toolbar feedback
@@ -131,7 +180,14 @@ struct IssueListView: View {
     /// Comments per issue from `bd show` (`bd list` has none), with the `updated_at` they were
     /// fetched at; refetched when the store's copy of the issue moves on (a comment updates it).
     @State private var panelComments: [String: FetchedComments] = [:]
+    /// Comment fetches run only for cards on screen (LazyVStack onAppear/onDisappear), at most
+    /// `maxCommentFetches` `bd show` at a time; selecting dozens of issues would otherwise start
+    /// dozens of `bd` processes and rebuild the panel once per result.
+    @State private var visibleCardIDs: Set<String> = []
+    @State private var commentQueue: [String] = []
     @State private var commentFetches: Set<String> = []
+    @State private var panelRefreshPending = false
+    private static let maxCommentFetches = 4
     /// The `bd show` fallback used before the store loads; cancelled once the store can serve.
     @State private var panelFallbackTask: Task<Void, Never>? = nil
     @FocusState private var listFocused: Bool
@@ -210,6 +266,7 @@ struct IssueListView: View {
         .onChange(of: selectedPriorities) { _ in applyLocalFilters() }
         .onChange(of: selectedTypes)      { _ in applyLocalFilters() }
         .onChange(of: titleSearch)        { _ in applyLocalFilters() }
+        .onChange(of: issueSort)          { _ in applyLocalFilters() }
         .onChange(of: selectedIDs) { newSelection in
             // Persist selection to SceneStorage
             selectedIDsJSON = encodeIDSet(newSelection)
@@ -291,6 +348,8 @@ struct IssueListView: View {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
             .buttonStyle(.bordered).controlSize(.small)
+            .keyboardShortcut("r", modifiers: .command)
+            .help("Re-read all issues (\u{2318}R)")
             .disabled(store == nil || store?.isLoading == true)
         }
         .padding(.horizontal).padding(.vertical, 8)
@@ -352,6 +411,11 @@ struct IssueListView: View {
                 }
             }
             .listStyle(.plain)
+            // Double-click (or Return) on a single selected row edits it; rows keep their own
+            // context menus.
+            .contextMenu(forSelectionType: String.self, menu: { _ in }, primaryAction: { ids in
+                if ids.count == 1, let id = ids.first { openEditor(for: id) }
+            })
             .focused($listFocused)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -373,6 +437,11 @@ struct IssueListView: View {
                         .background(Color.accentColor, in: Capsule())
                 }
                 Spacer()
+
+                if !commentFetches.isEmpty || !commentQueue.isEmpty {
+                    ProgressView().scaleEffect(0.5).frame(width: 16, height: 16)
+                        .help("Loading comments\u{2026}")
+                }
 
                 // Status change feedback
                 if isChangingStatus {
@@ -509,7 +578,15 @@ struct IssueListView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(panelContents, id: \.id) { detail in
-                            IssueDetailCard(detail: detail)
+                            IssueDetailCard(detail: detail, onEdit: { openEditor(for: detail.id) })
+                                .onAppear {
+                                    visibleCardIDs.insert(detail.id)
+                                    requestComments(detail.id)
+                                }
+                                .onDisappear {
+                                    visibleCardIDs.remove(detail.id)
+                                    commentQueue.removeAll { $0 == detail.id }
+                                }
                             if detail.id != panelContents.last?.id {
                                 Divider().padding(.vertical, 4)
                             }
@@ -528,6 +605,7 @@ struct IssueListView: View {
             StatusFilterMenu(selectedStatuses: $selectedStatuses)
             PriorityFilterMenu(selectedPriorities: $selectedPriorities)
             TypeFilterMenu(selectedTypes: $selectedTypes)
+            SortMenu(sort: $issueSort)
             Spacer()
             HStack(spacing: 0) {
                 // Leading separator to visually separate from left-side filter menus
@@ -554,6 +632,7 @@ struct IssueListView: View {
                     TextField("Search\u{2026}", text: $titleSearch)
                         .textFieldStyle(.plain)
                         .font(.subheadline)
+                        .focused($searchFocused)
                     if !titleSearch.isEmpty {
                         Button { titleSearch = "" } label: {
                             Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
@@ -569,6 +648,13 @@ struct IssueListView: View {
         .padding(.horizontal, 12)
         .frame(height: 34)
         .background(.bar)
+        .background {
+            // ⌘F focuses the search field (a keyboard shortcut needs a button to hang on)
+            Button("Find") { searchFocused = true }
+                .keyboardShortcut("f", modifiers: .command)
+                .opacity(0).frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        }
     }
 
     // MARK: - Helpers
@@ -614,8 +700,14 @@ struct IssueListView: View {
         await MainActor.run { showCopied = false }
     }
 
-    /// Shows the selected issues from the store at once, then fetches comments in the
-    /// background where missing or stale. Falls back to `bd show` for issues the store
+    /// Opens the edit sheet for an issue (detail-panel card, or double-click in the list). Looked
+    /// up in the store so it works for any selected issue, including one filtered out since.
+    private func openEditor(for id: String) {
+        if let issue = workspace.issues.first(where: { $0.id == id }) { editIssue = issue }
+    }
+
+    /// Shows the selected issues from the store at once, then fetches comments for the cards
+    /// on screen where missing or stale. Falls back to `bd show` for issues the store
     /// doesn't have yet (first load still running).
     private func refreshPanel() {
         let ids = Array(selectedIDs)
@@ -633,26 +725,60 @@ struct IssueListView: View {
         let details = ids.compactMap { store.detail(for: $0, comments: panelComments[$0]?.comments) }
         panelContents = details
 
+        for detail in details where visibleCardIDs.contains(detail.id) {
+            requestComments(detail.id)
+        }
+    }
+
+    /// Whether the panel's copy of an issue's comments is missing or older than the store's
+    /// issue (a new comment bumps updated_at). Strictly newer: equal never refetches, so the
+    /// fetch → refresh cycle can't loop.
+    private func commentsAreStale(_ id: String) -> Bool {
+        guard let fetched = panelComments[id] else { return true }
+        guard let current = store?.detail(for: id, comments: nil) else { return false }
+        return current.updatedAt > fetched.updatedAt
+    }
+
+    /// Queues a comment fetch for a card on screen, if needed and not already queued/running.
+    private func requestComments(_ id: String) {
+        guard commentsAreStale(id), !commentFetches.contains(id), !commentQueue.contains(id) else { return }
+        commentQueue.append(id)
+        startCommentFetches()
+    }
+
+    /// Starts queued fetches up to the limit, skipping cards that have left the screen (rapid
+    /// selection changes leave stale entries behind).
+    private func startCommentFetches() {
         // The attached store's path, not `workingDirectory`: this can run from an onChange
         // closure, whose struct copy still holds the previous directory (GUIDELINES #5).
-        let dir = store.path
-        // Fetch when never fetched, or when the store's copy is strictly newer than the fetch
-        // (strictly: equal or older never refetches, so this can't loop).
-        for detail in details
-        where (panelComments[detail.id].map { detail.updatedAt > $0.updatedAt } ?? true)
-            && !commentFetches.contains(detail.id) {
-            let id = detail.id
+        guard let dir = store?.path else { return }
+        while commentFetches.count < Self.maxCommentFetches, !commentQueue.isEmpty {
+            let id = commentQueue.removeFirst()
+            guard visibleCardIDs.contains(id), commentsAreStale(id) else { continue }
             commentFetches.insert(id)
             Task {
                 let fetched = try? await Task.detached(priority: .userInitiated) {
                     try BeadsRunner.showDetail(id: id, workingDirectory: dir)
                 }.value
                 commentFetches.remove(id)
-                guard let fetched else { return }
-                panelComments[id] = FetchedComments(updatedAt: fetched.updatedAt,
-                                                    comments: fetched.comments ?? [])
-                refreshPanel()
+                if let fetched {
+                    panelComments[id] = FetchedComments(updatedAt: fetched.updatedAt,
+                                                        comments: fetched.comments ?? [])
+                    schedulePanelRefresh()
+                }
+                startCommentFetches()
             }
+        }
+    }
+
+    /// Coalesces fetch results into one panel rebuild instead of one per result.
+    private func schedulePanelRefresh() {
+        guard !panelRefreshPending else { return }
+        panelRefreshPending = true
+        Task {
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            panelRefreshPending = false
+            refreshPanel()
         }
     }
 
@@ -763,7 +889,7 @@ struct IssueListView: View {
     /// value that's about to be published) and prunes persisted selection/expansion to the
     /// IDs still shown. Cheap (in-memory), so it runs on every filter edit and store update.
     private func applyLocalFilters(_ flat: [BeadsIssue]? = nil) {
-        var tree = BeadsRunner.buildTree((flat ?? workspace.issues).filter(passesLocalFilters))
+        var tree = BeadsRunner.buildTree(sortedForDisplay((flat ?? workspace.issues).filter(passesLocalFilters)))
 
         // Client-side filtering for `.id` scope matches on the tree so that matching
         // children keep their ancestors.
@@ -825,25 +951,6 @@ struct IssueListView: View {
                          ids = [issue.id]
                      }
                      Task { await copyDetailsAsMarkdown(ids: ids) }
-                 },
-                 onSelect: {
-                     let cmdHeld = NSEvent.modifierFlags.contains(.command)
-                     if cmdHeld {
-                         if selectedIDs.contains(issue.id) {
-                             var newSelection = selectedIDs
-                             if newSelection.contains(issue.id) {
-                                 newSelection.remove(issue.id)
-                             } else {
-                                 newSelection.insert(issue.id)
-                             }
-                             selectedIDs = newSelection
-                         } else {
-                             selectedIDs.remove(issue.id)
-                         }
-                     } else {
-                         selectedIDs = [issue.id]
-                     }
-                     listFocused = true
                  })
     }
     
@@ -963,6 +1070,28 @@ private struct IssueRowSlot<Row: View>: View, Equatable {
     }
 
     var body: some View { row(issue) }
+}
+
+// MARK: - Sort Menu
+
+private struct SortMenu: View {
+    @Binding var sort: IssueSort
+
+    var body: some View {
+        Menu {
+            Picker("Sort By", selection: $sort) {
+                ForEach(IssueSort.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Label(sort.rawValue, systemImage: "arrow.up.arrow.down")
+                .font(.subheadline)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .controlSize(.regular)
+        .help("Sort the list (children are sorted within their parent)")
+    }
 }
 
 // MARK: - Status Filter Menu
@@ -1129,6 +1258,7 @@ private struct TypeFilterMenu: View {
 
 struct IssueDetailCard: View {
     let detail: BeadsIssueDetail
+    var onEdit: (() -> Void)? = nil
     @State private var isHoveringID = false
     
     private func dueColor(from isoString: String) -> Color {
@@ -1185,6 +1315,13 @@ struct IssueDetailCard: View {
                             .background(Color(nsColor: .controlBackgroundColor), in: Capsule())
                     }
                     Spacer()
+                    if let onEdit {
+                        Button(action: onEdit) {
+                            Image(systemName: "pencil")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Edit \(detail.id)")
+                    }
                 }
                 Text(detail.title)
                     .font(.headline)
@@ -1661,7 +1798,6 @@ struct IssueRow: View {
     var onClaim: () -> Void = {}
     var onClose: () -> Void = {}
     var onCopyDetails: () -> Void = {}
-    var onSelect: () -> Void = {}
 
     var body: some View {
         HStack(spacing: 10) {
@@ -1706,14 +1842,12 @@ struct IssueRow: View {
                 .foregroundStyle(.secondary)
         }
         .contentShape(Rectangle())
-        .onTapGesture(count: 2) { onEdit() }
-        .onTapGesture {
-            if showDetailPanel {
-                onSelect()
-            } else {
-                copyID()
-            }
-        }
+        // With the detail panel shown, the row has no tap gestures so the List's own selection
+        // (click, ⌘-click, Shift-click, drag) works; double-click edits via the List's
+        // primaryAction. A tap gesture here swallows those clicks. With the panel hidden,
+        // clicking copies the ID and double-clicking edits.
+        .gesture(TapGesture(count: 2).onEnded { onEdit() }, including: showDetailPanel ? .subviews : .all)
+        .gesture(TapGesture().onEnded { copyID() }, including: showDetailPanel ? .subviews : .all)
         .contextMenu {
             Button("Edit\u{2026}") { onEdit() }
             Button("View Detail") { onShowDetail() }
