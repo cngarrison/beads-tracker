@@ -2246,11 +2246,11 @@ struct IssueEditSheet: View {
 
             // Bottom bar
             HStack {
+                Spacer()
+                if isSaving { ProgressView().scaleEffect(0.75).padding(.trailing, 4) }
                 Button("Cancel") { dismiss() }
                     .buttonStyle(.bordered)
                     .keyboardShortcut(.escape, modifiers: [])
-                Spacer()
-                if isSaving { ProgressView().scaleEffect(0.75).padding(.trailing, 4) }
                 Button("Save") { attemptSave() }
                     .buttonStyle(.borderedProminent)
                     .disabled(!canSave)
