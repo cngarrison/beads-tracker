@@ -635,10 +635,13 @@ struct IssueListView: View {
 
                 // Search field + clear button
                 HStack(spacing: 4) {
-                    TextField("Search\u{2026}", text: $titleSearch)
+                    // Placeholder must fit the 180pt field (~28 characters at this size)
+                    TextField(searchScope == .id ? "IDs, comma separated\u{2026}" : "Search\u{2026}",
+                              text: $titleSearch)
                         .textFieldStyle(.plain)
                         .font(.subheadline)
                         .focused($searchFocused)
+                        .help(searchScope == .id ? "Search for several IDs, separated by commas or spaces" : "")
                     if !titleSearch.isEmpty {
                         Button { titleSearch = "" } label: {
                             Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
@@ -979,14 +982,18 @@ struct IssueListView: View {
     }
     
     /// Client-side substring search over the issue tree for the `.id` scope.
-    /// Case-insensitive substring match against `issue.id`. Preserves tree structure:
+    /// The query may hold several IDs separated by spaces and/or commas; an issue matches
+    /// when its `issue.id` contains any of them (case-insensitive). Preserves tree structure:
     /// an ancestor is kept (with only its matching descendants) whenever it or any
     /// descendant matches, so matches still display in context within the tree.
     private func clientSideSearchFilter(_ list: [BeadsIssue], query: String, scope: SearchScope) -> [BeadsIssue] {
-        let q = query.lowercased()
+        let terms = query.lowercased()
+            .split(whereSeparator: { $0 == "," || $0.isWhitespace })
+            .map(String.init)
+        guard !terms.isEmpty else { return list }
         func matches(_ issue: BeadsIssue) -> Bool {
-            if issue.id.lowercased().contains(q) { return true }
-            return false
+            let id = issue.id.lowercased()
+            return terms.contains { id.contains($0) }
         }
         func filter(_ items: [BeadsIssue]) -> [BeadsIssue] {
             var result: [BeadsIssue] = []

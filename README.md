@@ -122,7 +122,7 @@ Field reference:
 The list loads when you choose a repository and then updates live as issues change (the **Live** indicator), re-reading from `bd` every few minutes. Click **Refresh** (↺, `⌘R`) to re-read now.
 
 - **Filter** by status, priority and type, and **sort** by priority, last modified or created date. Epics expand to show their children, which are sorted the same way.
-- **Search** (`⌘F`) by title, description, notes, all three (**All Content**) or ID. An ID search shows matching issues whatever their status, priority or type (those menus dim while they are ignored); the other scopes keep the filters.
+- **Search** (`⌘F`) by title, description, notes, all three (**All Content**) or ID. An ID search takes several IDs separated by spaces or commas, and shows matching issues whatever their status, priority or type (those menus dim while they are ignored); the other scopes keep the filters.
 - **Select** issues (click, ⌘-click, Shift-click or drag) to see them in the detail panel. The pencil button on a card, or a double-click on a row, edits that issue. With one issue selected, the panel's toolbar also has a status menu and copy actions.
 - **Right-click** a row to claim or close it, view its full detail, or copy its ID, title or details as Markdown.
 
