@@ -96,21 +96,27 @@ struct IssueListView: View {
         nonmutating set { expandedIDsJSON = encodeIDSet(newValue) }
     }
 
+    /// Searching by ID shows matches whatever their status, priority or type: if you know the
+    /// ID, you want to see it. Other scopes keep the filters.
+    private var isIDSearchIgnoringFilters: Bool {
+        searchScope == .id && !titleSearch.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
     private func passesLocalFilters(_ issue: BeadsIssue) -> Bool {
         // Mirrors `bd list --all` when every status (or none) is selected: unlisted
         // statuses show too.
         let allStatuses: Set<String> = ["open", "in_progress", "blocked", "deferred", "closed"]
-        if !selectedStatuses.isEmpty, selectedStatuses != allStatuses,
+        if !isIDSearchIgnoringFilters, !selectedStatuses.isEmpty, selectedStatuses != allStatuses,
            !selectedStatuses.contains(issue.status) { return false }
 
         let allPriorities: Set<String> = ["0", "1", "2", "3", "4"]
-        if !selectedPriorities.isEmpty, selectedPriorities != allPriorities,
+        if !isIDSearchIgnoringFilters, !selectedPriorities.isEmpty, selectedPriorities != allPriorities,
            !selectedPriorities.contains(String(issue.priority)) { return false }
 
         // Same semantics as the former --exclude-type: hide only the unselected menu
         // types, so types not in the menu (or no type) always show.
         let allMenuTypes: Set<String> = ["bug", "feature", "task", "epic", "chore", "decision"]
-        if !selectedTypes.isEmpty, selectedTypes != allMenuTypes,
+        if !isIDSearchIgnoringFilters, !selectedTypes.isEmpty, selectedTypes != allMenuTypes,
            let type = issue.issueType, allMenuTypes.subtracting(selectedTypes).contains(type) { return false }
 
         // `.id` is matched on the tree instead (clientSideSearchFilter) so matches keep
@@ -602,9 +608,9 @@ struct IssueListView: View {
     private var filterBar: some View {
         HStack(spacing: 8) {
             // N.B. explicit frame height prevents Menu(borderlessButton) from expanding the bar
-            StatusFilterMenu(selectedStatuses: $selectedStatuses)
-            PriorityFilterMenu(selectedPriorities: $selectedPriorities)
-            TypeFilterMenu(selectedTypes: $selectedTypes)
+            StatusFilterMenu(selectedStatuses: $selectedStatuses, isIgnored: isIDSearchIgnoringFilters)
+            PriorityFilterMenu(selectedPriorities: $selectedPriorities, isIgnored: isIDSearchIgnoringFilters)
+            TypeFilterMenu(selectedTypes: $selectedTypes, isIgnored: isIDSearchIgnoringFilters)
             SortMenu(sort: $issueSort)
             Spacer()
             HStack(spacing: 0) {
@@ -1096,8 +1102,15 @@ private struct SortMenu: View {
 
 // MARK: - Status Filter Menu
 
+/// Tooltip for a filter menu while an ID search is active: the search shows every status,
+/// priority and type. The menu's selection is kept (and can still be edited) and applies
+/// again once the search is cleared or the scope changes.
+private let filterIgnoredHelp = "Searching by ID ignores the status, priority and type filters. They apply again when the search is cleared."
+
 private struct StatusFilterMenu: View {
     @Binding var selectedStatuses: Set<String>
+    /// See `filterIgnoredHelp`.
+    var isIgnored = false
 
     private let statuses: [(value: String, display: String)] = [
         ("open",        "Open"),
@@ -1109,7 +1122,7 @@ private struct StatusFilterMenu: View {
     private var allSet: Set<String> { Set(statuses.map(\.value)) }
 
     private var label: String {
-        if selectedStatuses.isEmpty || selectedStatuses == allSet { return "All Statuses" }
+        if isIgnored || selectedStatuses.isEmpty || selectedStatuses == allSet { return "All Statuses" }
         if selectedStatuses.count == 1,
            let name = statuses.first(where: { selectedStatuses.contains($0.value) })?.display {
             return name
@@ -1144,6 +1157,8 @@ private struct StatusFilterMenu: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .controlSize(.regular)
+        .opacity(isIgnored ? 0.5 : 1)
+        .help(isIgnored ? filterIgnoredHelp : "")
     }
 }
 
@@ -1151,6 +1166,8 @@ private struct StatusFilterMenu: View {
 
 private struct PriorityFilterMenu: View {
     @Binding var selectedPriorities: Set<String>
+    /// See `filterIgnoredHelp`.
+    var isIgnored = false
 
     private let priorities: [(value: String, display: String)] = [
         ("0", "P0 \u{2014} Critical"),
@@ -1162,7 +1179,7 @@ private struct PriorityFilterMenu: View {
     private var allSet: Set<String> { Set(priorities.map(\.value)) }
 
     private var label: String {
-        if selectedPriorities.isEmpty || selectedPriorities == allSet { return "Priority" }
+        if isIgnored || selectedPriorities.isEmpty || selectedPriorities == allSet { return "Priority" }
         if selectedPriorities.count == 1 { return "P" + selectedPriorities.first! }
         let sorted = selectedPriorities.compactMap { Int($0) }.sorted()
         let isContiguous = !sorted.isEmpty && sorted.last! - sorted.first! + 1 == sorted.count
@@ -1197,6 +1214,8 @@ private struct PriorityFilterMenu: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .controlSize(.regular)
+        .opacity(isIgnored ? 0.5 : 1)
+        .help(isIgnored ? filterIgnoredHelp : "")
     }
 }
 
@@ -1204,6 +1223,8 @@ private struct PriorityFilterMenu: View {
 
 private struct TypeFilterMenu: View {
     @Binding var selectedTypes: Set<String>
+    /// See `filterIgnoredHelp`.
+    var isIgnored = false
 
     private let types: [(value: String, display: String)] = [
         ("bug",      "Bug"),
@@ -1216,7 +1237,7 @@ private struct TypeFilterMenu: View {
     private var allSet: Set<String> { Set(types.map(\.value)) }
 
     private var label: String {
-        if selectedTypes.isEmpty || selectedTypes == allSet { return "Type" }
+        if isIgnored || selectedTypes.isEmpty || selectedTypes == allSet { return "Type" }
         if selectedTypes.count == 1,
            let name = types.first(where: { selectedTypes.contains($0.value) })?.display {
             return name
@@ -1251,6 +1272,8 @@ private struct TypeFilterMenu: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .controlSize(.regular)
+        .opacity(isIgnored ? 0.5 : 1)
+        .help(isIgnored ? filterIgnoredHelp : "")
     }
 }
 
