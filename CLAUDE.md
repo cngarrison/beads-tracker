@@ -14,7 +14,8 @@ no database or API layer of its own. The project tracks its own development in `
 - **Source:** `ContentView.swift`, `IssueListView.swift` (largest: list/detail/edit views),
   `CreateIssueView.swift`, `Models.swift`, `BeadsRunner.swift` (all `bd` subprocess wrappers),
   `BeadsEventsWatcher.swift` (real-time sync via `bd events tail`), `WorkspaceStore.swift`
-  (shared per-workspace in-memory issue store, patched from events), `BTLog.swift`
+  (shared per-workspace in-memory issue store, patched from events), `ReviewTools.swift`
+  (detail-panel "Needs you" review, replies appended to Notes, optional Claude Haiku), `BTLog.swift`
 - **Build/config:** `Makefile`, `Info.plist`, `BeadsTracker.entitlements`, `.github/` (release
   workflow), `scripts/release-version.sh`, `scripts/release-notes.sh`, `.githooks/`
 - **Docs:** `README.md`, `ROADMAP.md`, `CONTRIBUTING.md` (keep its project layout and conventions

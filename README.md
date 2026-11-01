@@ -31,6 +31,7 @@ A native macOS app for creating, browsing and managing issues in the [beads](htt
 - **Live.** Changes from anyone, including your agents, appear as they happen, using `bd`'s events journal (the **Live** indicator). The list is also re-read in the background every few minutes, to pick up changes the journal doesn't record such as `bd dolt pull`, and it stays on screen while it refreshes.
 - **Browse the whole tree.** Epics expand to show their children. Filter by status, priority and type; sort by priority, last modified (an epic rises when its visible children change) or created date; search by title, description, notes, all three, or ID.
 - **See and act on issues.** Select one or many (click, ⌘-click, Shift-click) to see them in the detail panel, with description, design, acceptance criteria, notes, comments, dependencies and children. Claim, close or change status, edit fields, due and defer dates, add comments, or copy issues as Markdown.
+- **Review dense issues.** Agent-written issues can be hard to read. Find a word across the content of the issues you're viewing, or turn on **Needs you** to pull out the questions and decisions waiting on you. With your Anthropic API key, Claude rewrites an issue as a plain-language brief, with each decision as a question you answer by picking an option. Your answers and notes go into the issue's Notes, signed and dated, with no edit form.
 - **Create issues** with a form that mirrors `bd create-form`: title, description, type, priority, assignee, labels, external reference, design notes, acceptance criteria and dependencies. An unsaved form is kept as a draft, and quitting asks before discarding it.
 - **Multi-window.** Open a window per project, each with its own repository, filters and selection. Windows on the same repository share one in-memory copy, and recent repositories are a click away.
 - **Works with embedded or server-mode Dolt.** No special configuration: the app shells out to `bd`, so it follows whatever storage mode your project already uses.
@@ -128,6 +129,36 @@ The list loads when you choose a repository and then updates live as issues chan
 
 Live updates use `bd`'s events journal, which the app turns on for each repository it opens (`bd config set events-journal true`).
 
+### Reviewing issues
+
+The bar above the detail cards helps you get through long, dense issues.
+
+- **Find in details** (`⌥⌘F`) highlights a word in every section and comment of the issues shown, and counts the matches. (`⌘F` stays the list's search.)
+- **Needs you** adds a box to the top of each card listing the questions and decisions waiting on you, and highlights where they appear in the text. Click it to turn it on for the issues shown; choose **Always Show** from its menu to turn it on for every issue (remembered across relaunches).
+- **Reply** to an item, or use the note button beside the pencil on a card, to add a line to the issue's Notes (`bd update --append-notes`), signed with your initials and dated:
+
+  ```
+  CNG 2026-11-01 (re: "Which option should we take?"): Option B. Keep it simple for now.
+  ```
+
+  Items that already have a reply like this are marked ✓.
+
+The gear on the bar holds the review settings:
+
+- **Sign replies as**: your initials (by default, the initials of your macOS account name).
+- **Find questions and decisions with**: the **built-in rules** (no network; they look for question sentences and phrases such as "decide whether", "decision needed" or "for CNG") or **Claude**.
+- **Anthropic API key**: needed for Claude, and kept in your Keychain. Using Claude sends the issue's content to the Anthropic API.
+- **Model**: defaults to Claude Haiku (`claude-haiku-5-5`); the menu lists the models your key can use, so a newer model needs no app update.
+- **Effort**: how much Claude thinks before writing (`low` by default). Lower is faster and cheaper; higher may judge tangled issues better.
+
+With Claude, the box becomes a **Brief**:
+
+- A short summary of what the issue is about and where it stands, with the key points.
+- Each item waiting on you as a plain question with its background and the options to choose from, the recommended one marked. **Show source** shows the original text.
+- Pick options and add comments on as many items as you like, then **Record answers in Notes** to add them all in one update. The brief is then remade from the new Notes, so answered items drop out.
+- A brief is made once per issue. If the issue changes some other way, the brief says it is out of date; ↺ or **Refresh** makes a new one.
+- A stopwatch line under the brief shows how long it took and where the time went (hover for connecting, waiting for Claude, the app, and tokens). Each brief is also logged under `[brief]` in `~/Library/Logs/BeadsTracker/beads-tracker.log`.
+
 ---
 
 ## `bd` not found
@@ -153,6 +184,7 @@ beads-tracker/
 ├── WorkspaceStore.swift     # Shared in-memory copy of a workspace's issues
 ├── CreateIssueView.swift    # Create sheet UI
 ├── IssueListView.swift      # Issue list, detail panel, edit sheet
+├── ReviewTools.swift        # Detail panel review: Needs you items, replies to Notes, Claude Haiku
 ├── BTLog.swift              # Diagnostic log file
 ├── Info.plist               # App bundle metadata
 ├── Makefile                 # Build + icon pipeline
