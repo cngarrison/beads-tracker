@@ -185,6 +185,17 @@ enum BeadsRunner {
         }
     }
 
+    // MARK: Append Notes
+
+    /// Append text to an issue's notes (`bd update --append-notes` adds it on a new line).
+    static func appendNotes(id: String, text: String, workingDirectory: String) throws {
+        let (stdout, stderr, status) = try run(["bd", "update", id, "--append-notes", text], in: workingDirectory)
+        if status != 0 {
+            let msg = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            throw BeadsError.commandFailed(msg.isEmpty ? stdout : msg)
+        }
+    }
+
     // MARK: Add Comment
 
     static func addComment(id: String, text: String, workingDirectory: String) throws {
