@@ -14,10 +14,12 @@ A native macOS app for creating, browsing and managing issues in the [beads](htt
   <tr>
     <td align="center"><strong>Create an issue</strong></td>
     <td align="center"><strong>Browse issues</strong></td>
+    <td align="center"><strong>Review an issue</strong></td>
   </tr>
   <tr>
-    <td><img src="docs/images/beads-tracker-create.png" alt="Create tab" width="480"/></td>
-    <td><img src="docs/images/beads-tracker-issues.png" alt="Issues tab" width="480"/></td>
+    <td valign="top"><img src="docs/images/beads-tracker-create.png" alt="Create an issue" height="360"/></td>
+    <td valign="top"><img src="docs/images/beads-tracker-issues.webp" alt="Issue list" height="360"/></td>
+    <td valign="top"><img src="docs/images/beads-tracker-issue-review.png" alt="Issue detail with a Claude brief: summary, a decision with options, and Record answer in Notes" height="360"/></td>
   </tr>
 </table>
 
@@ -118,7 +120,7 @@ Field reference:
 
 ### Browsing issues
 
-![Issues tab](docs/images/beads-tracker-issues.png)
+![Issues tab](docs/images/beads-tracker-issues.webp)
 
 The list loads when you choose a repository and then updates live as issues change (the **Live** indicator), re-reading from `bd` every few minutes. Click **Refresh** (↺, `⌘R`) to re-read now.
 

@@ -101,7 +101,8 @@ Key resources:
 - **Docs:** `README.md`, `ROADMAP.md`, `CONTRIBUTING.md`, `BEADS.md`, `NEW_PROJECT_SETUP.md` (BB
   guidelines template, not app-specific), this `GUIDELINES.md`
 - **Assets:** `BeadsTracker.svg`/`.icns`/`.png`, README images in `docs/images/`
-  (`beads-tracker-create.png`, `beads-tracker-issues.png`, `beadstracker-review.png`)
+  (`beads-tracker-create.png`, `beads-tracker-issues.webp`, `beads-tracker-issue-review.png`,
+  `beadstracker-review.png`)
 - **Issue tracker data:** `.beads/` directory (Dolt-backed beads database for this project's own
   issue tracking — accessed via `bd` commands, not direct file edits)
 - **Access:** read/write/edit/execute all permitted on this single data source; no restricted
