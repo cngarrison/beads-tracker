@@ -4,7 +4,7 @@ A native macOS app for creating, browsing and managing issues in the [beads](htt
 
 **Repository:** [github.com/cngarrison/beads-tracker](https://github.com/cngarrison/beads-tracker) · **Author:** [@cngarrison](https://github.com/cngarrison)
 
-<img src="BeadsTracker.svg" alt="Beads Tracker icon" width="96"/>
+<img src="BeadsTracker.svg" alt="Beads Tracker icon" width="48"/>
 
 ---
 
