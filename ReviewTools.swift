@@ -47,6 +47,7 @@ struct ReviewBrief {
 struct BriefTiming {
     let model: String
     let effort: String
+    let maxTokens: Int
     var prepare: TimeInterval = 0        // building the request (app)
     var connect: TimeInterval? = nil     // DNS, TCP and TLS, when a new connection was opened
     var waiting: TimeInterval? = nil     // request sent -> first byte back: the model working
@@ -68,7 +69,7 @@ struct BriefTiming {
     }
 
     var detail: String {
-        var lines = ["Model: \(model), \(effort) effort",
+        var lines = ["Model: \(model), \(effort) effort, \(maxTokens.formatted())-token output limit",
                      "Preparing request: \(Self.secs(prepare))"]
         if let connect { lines.append("Connecting (DNS, TCP, TLS): \(Self.secs(connect))") }
         if let waiting { lines.append("Waiting for Claude (sent to first byte): \(Self.secs(waiting))") }
@@ -85,7 +86,7 @@ struct BriefTiming {
 
     var logLine: String {
         func ms(_ t: TimeInterval?) -> String { t.map { "\(Int($0 * 1000))ms" } ?? "-" }
-        return "model=\(model) effort=\(effort) total=\(ms(total)) prepare=\(ms(prepare)) connect=\(ms(connect)) "
+        return "model=\(model) effort=\(effort) max_tokens=\(maxTokens) total=\(ms(total)) prepare=\(ms(prepare)) connect=\(ms(connect)) "
             + "wait=\(ms(waiting)) download=\(ms(download)) request=\(ms(request)) parse=\(ms(parse)) "
             + "in=\(inputTokens.map(String.init) ?? "-") out=\(outputTokens.map(String.init) ?? "-") "
             + "request-id=\(requestID ?? "-")"
@@ -304,6 +305,16 @@ enum AnthropicReview {
         return efforts.contains(stored) ? stored : defaultEffort
     }
 
+    /// Output token limit choices. Thinking counts toward the limit as well as the brief itself.
+    static let maxTokensChoices = [8_000, 16_000, 32_000, 64_000, 128_000]
+    static let defaultMaxTokens = 32_000
+
+    /// The output limit chosen in the review settings ("reviewMaxTokens"), or the default.
+    static var maxTokens: Int {
+        let stored = UserDefaults.standard.integer(forKey: "reviewMaxTokens")
+        return maxTokensChoices.contains(stored) ? stored : defaultMaxTokens
+    }
+
     /// The model chosen in the review settings ("reviewModel"), or the default.
     static var model: String {
         let stored = (UserDefaults.standard.string(forKey: "reviewModel") ?? "").trimmingCharacters(in: .whitespaces)
@@ -312,7 +323,8 @@ enum AnthropicReview {
 
     private static func request(_ path: String, apiKey: String) -> URLRequest {
         var req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/" + path)!)
-        req.timeoutInterval = 120
+        // A long brief at a high output limit can take minutes; the answer isn't streamed.
+        req.timeoutInterval = 600
         req.setValue("application/json", forHTTPHeaderField: "content-type")
         req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         req.setValue("2026-10-21", forHTTPHeaderField: "anthropic-version")
@@ -373,8 +385,8 @@ enum AnthropicReview {
     }
 
     static func brief(title: String, sections: [(String, String)], initials: String, model: String, effort: String,
-                      apiKey: String) async throws -> ReviewBrief {
-        var timing = BriefTiming(model: model, effort: effort)
+                      maxTokens: Int, apiKey: String) async throws -> ReviewBrief {
+        var timing = BriefTiming(model: model, effort: effort, maxTokens: maxTokens)
         let started = Date()
         var req = request("messages", apiKey: apiKey)
         req.httpMethod = "POST"
@@ -414,7 +426,7 @@ enum AnthropicReview {
         ]
         let body: [String: Any] = [
             "model": model,
-            "max_tokens": 8000,
+            "max_tokens": maxTokens,
             "system": systemPrompt(initials: initials),
             "output_config": ["effort": effort, "format": ["type": "json_schema", "schema": schema]],
             "messages": [["role": "user", "content": "Issue: \(title)\n\n\(document)"]],
@@ -429,7 +441,7 @@ enum AnthropicReview {
         do {
             json = try await send(req, delegate: collector)
         } catch {
-            BTLog.log("failed model=\(model) after \(Int(Date().timeIntervalSince(sent) * 1000))ms: \(error.localizedDescription)", category: "brief")
+            BTLog.log("failed model=\(model) effort=\(effort) max_tokens=\(maxTokens) after \(Int(Date().timeIntervalSince(sent) * 1000))ms: \(error.localizedDescription)", category: "brief")
             throw error
         }
         let received = Date()
@@ -452,8 +464,14 @@ enum AnthropicReview {
         }
 
         switch json["stop_reason"] as? String {
-        case "refusal":    throw ReviewError(message: "Claude declined to review this issue.")
-        case "max_tokens": throw ReviewError(message: "Claude's answer was cut off.")
+        case "refusal":
+            BTLog.log("refused \(timing.logLine)", category: "brief")
+            throw ReviewError(message: "Claude declined to review this issue.")
+        case "max_tokens":
+            BTLog.log("cut off \(timing.logLine)", category: "brief")
+            throw ReviewError(message: "Claude's answer was cut off at the \(maxTokens.formatted())-token output limit "
+                + "(its thinking counts toward the limit) after \(BriefTiming.secs(timing.request)). "
+                + "Raise Output limit or lower Effort in Review settings, then Refresh.")
         default: break
         }
         let blocks = json["content"] as? [[String: Any]] ?? []
@@ -566,11 +584,13 @@ final class NeedsYouAI: ObservableObject {
         let sections = reviewSections(d)
         let model = AnthropicReview.model
         let effort = AnthropicReview.effort
+        let maxTokens = AnthropicReview.maxTokens
         let started = Date()
         Task {
             do {
                 var brief = try await AnthropicReview.brief(title: title, sections: sections, initials: initials,
-                                                            model: model, effort: effort, apiKey: apiKey)
+                                                            model: model, effort: effort, maxTokens: maxTokens,
+                                                            apiKey: apiKey)
                 brief.timing?.total = Date().timeIntervalSince(started)
                 if let timing = brief.timing { BTLog.log("\(id) \(timing.logLine)", category: "brief") }
                 briefs[id] = Stored(brief: brief, contentKey: key)
@@ -869,6 +889,7 @@ struct ReviewSettingsView: View {
     @AppStorage("needsYouSource") private var source: String = "rules"
     @AppStorage("reviewModel") private var model: String = ""
     @AppStorage("reviewEffort") private var effort: String = AnthropicReview.defaultEffort
+    @AppStorage("reviewMaxTokens") private var maxTokens: Int = AnthropicReview.defaultMaxTokens
     @State private var availableModels: [String] = []
     @State private var keyInput = ""
     @State private var hasKey = AnthropicKeychain.load() != nil
@@ -926,7 +947,23 @@ struct ReviewSettingsView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                Text("How much Claude thinks before writing the brief. Lower is faster and cheaper; higher may judge tangled issues better. New briefs use these settings; Refresh a brief to remake it.")
+                Text("How much Claude thinks before writing the brief. Lower is faster and cheaper; higher may judge tangled issues better.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("Output limit").font(.subheadline).fontWeight(.medium)
+                    Spacer()
+                    Picker("", selection: $maxTokens) {
+                        ForEach(AnthropicReview.maxTokensChoices, id: \.self) { n in
+                            Text("\(n / 1000)K tokens").tag(n)
+                        }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                }
+                Text("The most Claude may write for one brief, thinking included. A brief is cut off at this limit; you pay only for what is written. New briefs use these settings; Refresh a brief to remake it.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

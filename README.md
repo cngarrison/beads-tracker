@@ -154,6 +154,7 @@ The gear on the bar holds the review settings:
 - **Anthropic API key**: needed for Claude, and kept in your Keychain. Using Claude sends the issue's content to the Anthropic API.
 - **Model**: defaults to Claude Haiku (`claude-haiku-5-5`); the menu lists the models your key can use, so a newer model needs no app update.
 - **Effort**: how much Claude thinks before writing (`low` by default). Lower is faster and cheaper; higher may judge tangled issues better.
+- **Output limit**: the most Claude may write for one brief, its thinking included (32K tokens by default, up to 128K). A brief on an issue with many decisions can need more; if one is cut off, raise the limit or lower the effort. You pay only for what is written.
 
 With Claude, the box becomes a **Brief**:
 
