@@ -29,6 +29,11 @@
       <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000" flood-opacity="0.35"/>
     </filter>
 
+    <!-- Icon shadow below the rounded square, as on other macOS app icons -->
+    <filter id="icon-shadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="5" stdDeviation="6" flood-color="#000" flood-opacity="0.3"/>
+    </filter>
+
     <!-- Inner highlight on beads -->
     <radialGradient id="shine" cx="0.35" cy="0.28" r="0.6" gradientUnits="objectBoundingBox">
       <stop offset="0%" stop-color="rgba(255,255,255,0.55)"/>
@@ -36,8 +41,12 @@
     </radialGradient>
   </defs>
 
+  <!-- macOS icon grid: the artwork is drawn on a 512 square and scaled to the standard
+       412 x 412 body (824 of 1024), centred, leaving room for the shadow. -->
+  <g transform="translate(50 50) scale(0.8046875)">
+
   <!-- ── Background ── -->
-  <rect width="512" height="512" rx="114" fill="url(#bg)"/>
+  <rect width="512" height="512" rx="114" fill="url(#bg)" filter="url(#icon-shadow)"/>
   <!-- Subtle border highlight -->
   <rect width="512" height="512" rx="114" fill="none"
         stroke="rgba(255,255,255,0.07)" stroke-width="2"/>
@@ -68,4 +77,6 @@
   <!-- ── Right bead (teal) ── -->
   <circle cx="394" cy="270" r="58" fill="url(#b-teal)" filter="url(#shadow)"/>
   <circle cx="394" cy="270" r="58" fill="url(#shine)"/>
+
+  </g>
 </svg>
