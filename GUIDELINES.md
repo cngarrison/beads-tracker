@@ -92,7 +92,8 @@ Key resources:
 - **Source files:** `ContentView.swift`, `IssueListView.swift` (largest, ~84KB — list/detail/edit
   views), `CreateIssueView.swift`, `Models.swift`, `BeadsRunner.swift` (all `bd` CLI subprocess
   wrapper methods), `BeadsEventsWatcher.swift` (real-time `bd events tail` sync),
-  `WorkspaceStore.swift` (shared per-workspace in-memory issue store, patched from events)
+  `WorkspaceStore.swift` (shared per-workspace in-memory issue store, patched from events),
+  `ReviewTools.swift` (detail-panel "Needs you" review, replies appended to Notes, optional Claude Haiku)
 - **Build/config:** `Makefile`, `Info.plist`, `BeadsTracker.entitlements`, `.github/` (release
   workflow), `scripts/` (release-version.sh, release-notes.sh: GitHub release notes built from
   the commit messages since the previous tag, so commits should use `feat:`/`fix:`/`perf:`/`ci:`/

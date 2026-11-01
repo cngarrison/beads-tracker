@@ -89,6 +89,14 @@ struct IssueListView: View {
     @State private var searchScope: SearchScope = .title
     @SceneStorage("issueSort") private var issueSort: IssueSort = .priority
     @FocusState private var searchFocused: Bool
+    // Detail panel review bar: find-in-details term and "Needs you" mode
+    @State private var panelFind: String = ""
+    // "Needs you" is on for the issues it was turned on for (this window, until relaunch),
+    // or for every issue when Always is chosen (kept across relaunch).
+    @SceneStorage("needsYouAlways") private var needsYouAlways = false
+    @State private var needsYouIDs: Set<String> = []
+    @State private var showReviewSettings = false
+    @FocusState private var panelFindFocused: Bool
     
     // Expanded state: computed property works fine with DisclosureGroup
     private var expandedIDs: Set<String> {
@@ -581,10 +589,17 @@ struct IssueListView: View {
                 VStack { ProgressView() }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
+                reviewBar
+                Divider()
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(panelContents, id: \.id) { detail in
-                            IssueDetailCard(detail: detail, onEdit: { openEditor(for: detail.id) })
+                            IssueDetailCard(detail: detail,
+                                            onEdit: { openEditor(for: detail.id) },
+                                            findTerm: panelFind,
+                                            needsYouMode: needsYouAlways || needsYouIDs.contains(detail.id),
+                                            workingDirectory: workingDirectory,
+                                            onNotesAppended: { refreshAfterOwnChange() })
                                 .onAppear {
                                     visibleCardIDs.insert(detail.id)
                                     requestComments(detail.id)
@@ -600,6 +615,89 @@ struct IssueListView: View {
                     }
                 }
             }
+        }
+    }
+
+    // MARK: - Review Bar (detail panel)
+
+    /// Find-in-details field, the "Needs you" toggle and review settings, above the cards.
+    private var reviewBar: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 4) {
+                Image(systemName: "text.magnifyingglass").foregroundStyle(.secondary)
+                TextField("Find in details", text: $panelFind)
+                    .textFieldStyle(.plain)
+                    .font(.subheadline)
+                    .focused($panelFindFocused)
+                    .onExitCommand { panelFind = "" }
+                if !panelFind.isEmpty {
+                    let count = panelContents.reduce(0) { $0 + findMatchCount(panelFind, in: $1) }
+                    Text(count == 0 ? "No matches" : count == 1 ? "1 match" : "\(count) matches")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize()
+                    Button { panelFind = "" } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            Spacer(minLength: 4)
+            needsYouMenu
+            Button {
+                showReviewSettings.toggle()
+            } label: {
+                Image(systemName: "gearshape")
+            }
+            .buttonStyle(.borderless)
+            .help("Review settings: reply initials, Claude brief, model")
+            .popover(isPresented: $showReviewSettings, arrowEdge: .bottom) {
+                ReviewSettingsView()
+            }
+        }
+        .padding(.horizontal).padding(.vertical, 5)
+        .background {
+            // ⌥⌘F focuses the find field (⌘F belongs to the issue list's search)
+            Button("Find in Details") { panelFindFocused = true }
+                .keyboardShortcut("f", modifiers: [.command, .option])
+                .opacity(0).frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        }
+    }
+
+    /// True when "Needs you" is on for every issue shown in the panel.
+    private var needsYouShown: Bool {
+        needsYouAlways || (!panelContents.isEmpty && panelContents.allSatisfy { needsYouIDs.contains($0.id) })
+    }
+
+    /// Click: turn "Needs you" on or off for the issues shown. Menu: Always, for every issue.
+    private var needsYouMenu: some View {
+        Menu {
+            Button(needsYouShown && !needsYouAlways ? "Hide for These Issues" : "Show for These Issues") {
+                toggleNeedsYouForShown()
+            }
+            .disabled(needsYouAlways)
+            Toggle("Always Show", isOn: $needsYouAlways)
+        } label: {
+            Label(needsYouAlways ? "Needs you: Always" : "Needs you",
+                  systemImage: needsYouShown ? "person.fill.questionmark" : "person.badge.clock")
+        } primaryAction: {
+            toggleNeedsYouForShown()
+        }
+        .menuStyle(.borderedButton)
+        .controlSize(.small)
+        .fixedSize()
+        .help(needsYouShown
+              ? "Questions and decisions waiting on you are shown (click to hide; menu for Always)"
+              : "Show questions and decisions waiting on you for these issues (menu for Always)")
+    }
+
+    private func toggleNeedsYouForShown() {
+        let shown = Set(panelContents.map(\.id))
+        if needsYouShown {
+            needsYouAlways = false
+            needsYouIDs.subtract(shown)
+        } else {
+            needsYouIDs.formUnion(shown)
         }
     }
 
@@ -1289,8 +1387,81 @@ private struct TypeFilterMenu: View {
 struct IssueDetailCard: View {
     let detail: BeadsIssueDetail
     var onEdit: (() -> Void)? = nil
+    var findTerm: String = ""
+    var needsYouMode = false
+    /// When set, the card offers replies and notes, appended to Notes in this workspace.
+    var workingDirectory: String? = nil
+    var onNotesAppended: (() -> Void)? = nil
     @State private var isHoveringID = false
-    
+    /// The item being replied to; `noteReplyID` for a free note.
+    @State private var replyingTo: String? = nil
+    @AppStorage("replyInitials") private var storedInitials: String = ""
+    @AppStorage("needsYouSource") private var needsYouSource: String = "rules"
+    @ObservedObject private var ai = NeedsYouAI.shared
+    @State private var isRecording = false
+    @State private var recordError: String? = nil
+
+    private static let noteReplyID = "\u{1F}note"
+
+    private var usesAI: Bool { needsYouSource == "haiku" }
+
+    private var reviewItems: [ReviewItem] {
+        guard needsYouMode else { return [] }
+        if usesAI {
+            return ai.brief(for: detail)?.items ?? []
+        }
+        return heuristicReviewItems(detail, initials: replyInitials(storedInitials))
+    }
+
+    private func flagged(_ section: String, in items: [ReviewItem]) -> [String] {
+        items.filter { $0.section == section }.map(\.quote)
+    }
+
+    private func appendReply(_ answer: String, ref: String?) async throws {
+        try await appendToNotes([formatReply(answer, ref: ref, initials: replyInitials(storedInitials))])
+    }
+
+    /// Appends the lines to Notes in one `bd update`, so the issue changes (and its events
+    /// arrive) once however many answers are recorded.
+    private func appendToNotes(_ lines: [String]) async throws {
+        guard let dir = workingDirectory, !lines.isEmpty else { return }
+        let id = detail.id
+        // A blank line between entries keeps replies readable in the rendered Notes.
+        let body = lines.joined(separator: "\n\n")
+        let text = (detail.notes ?? "").isEmpty ? body : "\n" + body
+        try await Task.detached { try BeadsRunner.appendNotes(id: id, text: text, workingDirectory: dir) }.value
+        onNotesAppended?()
+    }
+
+    /// Brief items with a drafted answer, in brief order.
+    private func draftedItems(_ items: [ReviewItem]) -> [(ReviewItem, DraftAnswer)] {
+        items.compactMap { item in
+            let draft = ai.draft(detail.id, item.id)
+            return draft.text.isEmpty ? nil : (item, draft)
+        }
+    }
+
+    private func recordAnswers(_ items: [ReviewItem]) {
+        let drafted = draftedItems(items)
+        let initials = replyInitials(storedInitials)
+        let lines = drafted.map { formatReply($0.1.text, ref: $0.0.replyRef, initials: initials) }
+        let issueID = detail.id
+        isRecording = true
+        recordError = nil
+        // Marked before appending: the change's event can arrive before the append returns.
+        ai.refreshAfterNextChange(issueID)
+        Task {
+            do {
+                try await appendToNotes(lines)
+                ai.clearDrafts(issueID, drafted.map { $0.0.id })
+            } catch {
+                ai.refreshAfterNextChange(issueID, false)
+                recordError = error.localizedDescription
+            }
+            isRecording = false
+        }
+    }
+
     private func dueColor(from isoString: String) -> Color {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -1345,6 +1516,15 @@ struct IssueDetailCard: View {
                             .background(Color(nsColor: .controlBackgroundColor), in: Capsule())
                     }
                     Spacer()
+                    if workingDirectory != nil {
+                        Button {
+                            replyingTo = Self.noteReplyID
+                        } label: {
+                            Image(systemName: "text.append")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Add a signed, dated note to \(detail.id)")
+                    }
                     if let onEdit {
                         Button(action: onEdit) {
                             Image(systemName: "pencil")
@@ -1428,24 +1608,40 @@ struct IssueDetailCard: View {
                 }
             }
 
+            let items = reviewItems
+
+            if replyingTo == Self.noteReplyID, workingDirectory != nil {
+                NoteReplyEditor(prefix: "\(replyInitials(storedInitials)) \(replyDateStamp()):",
+                                onSubmit: { try await appendReply($0, ref: nil) },
+                                onCancel: { replyingTo = nil })
+            }
+
+            if needsYouMode {
+                needsYouList(items)
+            }
+
             // Description
             if let desc = detail.description, !desc.isEmpty {
-                MarkdownSection(title: "Description", markdown: desc)
+                MarkdownSection(title: "Description", markdown: desc,
+                                findTerm: findTerm, flagged: flagged("Description", in: items))
             }
 
             // Design notes
             if let design = detail.design, !design.isEmpty {
-                MarkdownSection(title: "Design", markdown: design)
+                MarkdownSection(title: "Design", markdown: design,
+                                findTerm: findTerm, flagged: flagged("Design", in: items))
             }
 
             // Acceptance Criteria
             if let ac = detail.acceptanceCriteria, !ac.isEmpty {
-                MarkdownSection(title: "Acceptance Criteria", markdown: ac)
+                MarkdownSection(title: "Acceptance Criteria", markdown: ac,
+                                findTerm: findTerm, flagged: flagged("Acceptance Criteria", in: items))
             }
 
             // Notes
             if let notes = detail.notes, !notes.isEmpty {
-                MarkdownSection(title: "Notes", markdown: notes)
+                MarkdownSection(title: "Notes", markdown: notes,
+                                findTerm: findTerm, flagged: flagged("Notes", in: items))
             }
 
             // Parent
@@ -1487,7 +1683,8 @@ struct IssueDetailCard: View {
                                 Spacer()
                                 Text(comment.createdAt).font(.caption2).foregroundStyle(.secondary)
                             }
-                            MarkdownBody(markdown: comment.text)
+                            MarkdownBody(markdown: comment.text,
+                                         findTerm: findTerm, flagged: flagged("Comments", in: items))
                         }
                         .padding(8)
                         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
@@ -1498,6 +1695,124 @@ struct IssueDetailCard: View {
         .textSelection(.enabled)
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
+        .task(id: needsYouMode && usesAI ? ai.contentKey(for: detail) : "") {
+            guard needsYouMode && usesAI else { return }
+            ai.requestIfNeeded(detail, initials: replyInitials(storedInitials))
+            ai.refreshIfChanged(detail, initials: replyInitials(storedInitials))
+        }
+    }
+
+    /// The "Needs you" callout: questions and decisions found in the content, each with a reply.
+    @ViewBuilder
+    private func needsYouList(_ items: [ReviewItem]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "person.fill.questionmark").foregroundStyle(.orange)
+                Text(usesAI ? "Brief" : "Needs you").font(.caption).fontWeight(.semibold).textCase(.uppercase)
+                if !items.isEmpty {
+                    let open = items.filter { !isAnswered($0, notes: detail.notes) }.count
+                    Text(open == items.count ? "\(open)" : "\(open) of \(items.count) unanswered")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if usesAI {
+                    if ai.isLoading(detail) {
+                        ProgressView().scaleEffect(0.5).frame(height: 12)
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            let elapsed = context.date.timeIntervalSince(ai.loadingSince(detail) ?? context.date)
+                            Text("Asking \(AnthropicReview.model) (\(AnthropicReview.effort))\u{2026} \(Int(elapsed)) s")
+                                .font(.caption2).foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                    } else {
+                        // The settings the shown brief was made with, which may differ from the current ones.
+                        Text(ai.brief(for: detail)?.timing.map { "\($0.model) (\($0.effort))" } ?? AnthropicReview.model)
+                            .font(.caption2).foregroundStyle(.secondary)
+                        Button {
+                            ai.refresh(detail, initials: replyInitials(storedInitials))
+                        } label: {
+                            Image(systemName: "arrow.clockwise").font(.caption2)
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Make a new brief from the issue as it is now")
+                    }
+                } else {
+                    Text("Built-in rules").font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            if usesAI, let message = ai.error(for: detail) {
+                Text(message).font(.caption).foregroundStyle(.red)
+            }
+            if usesAI, ai.isStale(detail), !ai.isLoading(detail) {
+                HStack(spacing: 6) {
+                    Image(systemName: "clock.arrow.circlepath").foregroundStyle(.secondary)
+                    Text("The issue has changed since this brief.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Refresh") { ai.refresh(detail, initials: replyInitials(storedInitials)) }
+                        .buttonStyle(.link).font(.caption)
+                }
+            }
+            if usesAI, let brief = ai.brief(for: detail) {
+                BriefSummaryView(brief: brief)
+                if !items.isEmpty { Divider() }
+            }
+            if items.isEmpty, !usesAI || ai.brief(for: detail) != nil {
+                Text("Nothing is waiting on you.").font(.caption).foregroundStyle(.secondary)
+            }
+            ForEach(items) { item in
+                if usesAI {
+                    let issueID = detail.id
+                    DecisionItemView(item: item,
+                                     answered: isAnswered(item, notes: detail.notes),
+                                     canReply: workingDirectory != nil,
+                                     draft: Binding(get: { ai.draft(issueID, item.id) },
+                                                    set: { ai.setDraft($0, issueID, item.id) }))
+                } else {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ReviewItemRow(item: item,
+                                      answered: isAnswered(item, notes: detail.notes),
+                                      isReplying: replyingTo == item.id || workingDirectory == nil,
+                                      onReply: { replyingTo = item.id })
+                        if replyingTo == item.id {
+                            NoteReplyEditor(prefix: "\(replyInitials(storedInitials)) \(replyDateStamp()) (re: \u{201C}\(quoteSnippet(item.replyRef))\u{201D}):",
+                                            onSubmit: { try await appendReply($0, ref: item.replyRef) },
+                                            onCancel: { replyingTo = nil })
+                                .padding(.leading, 22)
+                        }
+                    }
+                }
+            }
+            if usesAI, workingDirectory != nil, !items.isEmpty {
+                let count = draftedItems(items).count
+                HStack {
+                    if let recordError {
+                        Text(recordError).font(.caption).foregroundStyle(.red)
+                    }
+                    Spacer()
+                    Button {
+                        recordAnswers(items)
+                    } label: {
+                        if isRecording {
+                            ProgressView().scaleEffect(0.6)
+                        } else {
+                            Text(count <= 1 ? "Record answer in Notes" : "Record \(count) answers in Notes")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(isRecording || count == 0)
+                    .help("Append your answers to Notes in one update, each signed and dated")
+                }
+            }
+            if usesAI, let timing = ai.brief(for: detail)?.timing {
+                Label(timing.summary, systemImage: "stopwatch")
+                    .font(.caption2).foregroundStyle(.tertiary)
+                    .help(timing.detail)
+            }
+        }
+        .padding(10)
+        .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.orange.opacity(0.35)))
     }
 
     private var statusBadge: some View {
@@ -1535,9 +1850,11 @@ struct IssueDetailCard: View {
 
 struct MarkdownBody: View {
     let markdown: String
+    var findTerm: String = ""
+    var flagged: [String] = []
     @State private var renderedHeight: CGFloat = 40
     var body: some View {
-        MarkdownWebView(markdown: markdown, height: $renderedHeight)
+        MarkdownWebView(markdown: markdown, findTerm: findTerm, flagged: flagged, height: $renderedHeight)
             .frame(height: renderedHeight)
     }
 }
@@ -1545,6 +1862,8 @@ struct MarkdownBody: View {
 struct MarkdownSection: View {
     let title: String
     let markdown: String
+    var findTerm: String = ""
+    var flagged: [String] = []
     @State private var renderedHeight: CGFloat = 40
 
     var body: some View {
@@ -1554,7 +1873,7 @@ struct MarkdownSection: View {
                 .fontWeight(.semibold)
                 .foregroundStyle(.secondary)
                 .textCase(.uppercase)
-            MarkdownWebView(markdown: markdown, height: $renderedHeight)
+            MarkdownWebView(markdown: markdown, findTerm: findTerm, flagged: flagged, height: $renderedHeight)
                 .frame(height: renderedHeight)
         }
     }
@@ -1572,6 +1891,8 @@ class NonScrollingWebView: WKWebView {
 
 struct MarkdownWebView: NSViewRepresentable {
     let markdown: String
+    var findTerm: String = ""      // highlighted with <mark> wherever it occurs
+    var flagged: [String] = []     // quotes whose blocks are highlighted as "Needs you"
     @Binding var height: CGFloat
 
     func makeCoordinator() -> Coordinator { Coordinator(height: $height) }
@@ -1589,19 +1910,50 @@ struct MarkdownWebView: NSViewRepresentable {
 
     func updateNSView(_ webView: NonScrollingWebView, context: Context) {
         let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        webView.loadHTMLString(markdownHTML(markdown, dark: isDark), baseURL: nil)
+        let c = context.coordinator
+        c.findTerm = findTerm
+        c.flagged = flagged
+        // Reload only when the content changes; highlight changes are applied in place, so
+        // typing in the find field doesn't re-render (and re-measure) every section.
+        if c.loadedMarkdown != markdown || c.loadedDark != isDark {
+            c.loadedMarkdown = markdown
+            c.loadedDark = isDark
+            c.isLoaded = false
+            webView.loadHTMLString(markdownHTML(markdown, dark: isDark), baseURL: nil)
+        } else if c.isLoaded {
+            c.applyHighlights(webView)
+        }
     }
 
     class Coordinator: NSObject, WKNavigationDelegate {
         @Binding var height: CGFloat
+        var loadedMarkdown: String? = nil
+        var loadedDark = false
+        var isLoaded = false
+        var findTerm = ""
+        var flagged: [String] = []
+        private var applied: (String, [String])? = nil
         init(height: Binding<CGFloat>) { _height = height }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            isLoaded = true
+            applied = nil
+            applyHighlights(webView)
             webView.evaluateJavaScript("document.documentElement.scrollHeight") { result, _ in
                 if let h = result as? CGFloat {
                     DispatchQueue.main.async { self.height = max(20, h) }
                 }
             }
+        }
+
+        /// Highlights don't change the layout, so the measured height stays valid.
+        func applyHighlights(_ webView: WKWebView) {
+            if let applied, applied.0 == findTerm, applied.1 == flagged { return }
+            if applied == nil && findTerm.isEmpty && flagged.isEmpty { applied = ("", []); return }
+            applied = (findTerm, flagged)
+            guard let data = try? JSONSerialization.data(withJSONObject: [findTerm, flagged]),
+                  let args = String(data: data, encoding: .utf8) else { return }
+            webView.evaluateJavaScript("btHighlight.apply(null, \(args))", completionHandler: nil)
         }
     }
 }
@@ -1664,12 +2016,59 @@ blockquote {
 strong { font-weight: 600; }
 em { font-style: italic; }
 a { color: \(dark ? "#7ab3f5" : "#0066cc"); text-decoration: none; }
+mark.bt-find { background: #ffd54f; color: #000; border-radius: 2px; }
+.bt-flag { background: \(dark ? "rgba(255,159,10,0.22)" : "rgba(255,149,0,0.16)"); box-shadow: -4px 0 0 #ff9500; border-radius: 2px; }
 </style>
+<script>\(markdownHighlightScript)</script>
 </head>
 <body>\(convertMarkdownToHTML(md))</body>
 </html>
 """
 }
+
+/// `btHighlight(term, quotes)`: marks every case-insensitive occurrence of `term`, and flags
+/// each block whose text contains one of `quotes` (compared without markdown markers, case or
+/// extra whitespace, since the quotes come from the markdown source or from Claude).
+private let markdownHighlightScript = #"""
+function btNorm(s) { return s.toLowerCase().replace(/[*_`]/g, '').replace(/\s+/g, ' ').trim(); }
+function btHighlight(term, quotes) {
+  document.querySelectorAll('mark.bt-find').forEach(function (m) { m.replaceWith(document.createTextNode(m.textContent)); });
+  document.body.normalize();
+  document.querySelectorAll('.bt-flag').forEach(function (e) { e.classList.remove('bt-flag'); });
+  var qs = quotes.map(btNorm).filter(function (q) { return q.length > 0; });
+  if (qs.length) {
+    document.querySelectorAll('p, li, blockquote, h1, h2, h3, pre').forEach(function (el) {
+      var t = btNorm(el.textContent);
+      if (!t) return;
+      if (qs.some(function (q) {
+        return t.indexOf(q) >= 0 || (q.length > 40 && t.indexOf(q.slice(0, 40)) >= 0) || (t.length > 20 && q.indexOf(t) >= 0);
+      })) el.classList.add('bt-flag');
+    });
+  }
+  if (!term) return 0;
+  var lt = term.toLowerCase(), n = 0, nodes = [];
+  var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  nodes.forEach(function (node) {
+    var text = node.nodeValue, lower = text.toLowerCase(), i = lower.indexOf(lt);
+    if (i < 0) return;
+    var frag = document.createDocumentFragment(), last = 0;
+    while (i >= 0) {
+      frag.appendChild(document.createTextNode(text.slice(last, i)));
+      var m = document.createElement('mark');
+      m.className = 'bt-find';
+      m.textContent = text.slice(i, i + lt.length);
+      frag.appendChild(m);
+      n++;
+      last = i + lt.length;
+      i = lower.indexOf(lt, last);
+    }
+    frag.appendChild(document.createTextNode(text.slice(last)));
+    node.parentNode.replaceChild(frag, node);
+  });
+  return n;
+}
+"""#
 
 private func convertMarkdownToHTML(_ md: String) -> String {
     var html = ""

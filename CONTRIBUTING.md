@@ -117,6 +117,7 @@ BeadsEventsWatcher.swift   ── `bd events tail --follow` subprocess for live 
 WorkspaceStore.swift       ── Shared in-memory copy of a workspace's issues, patched from events
 CreateIssueView.swift      ── CreateIssueView, IssueFormContent, shared form helpers
 IssueListView.swift        ── Issue list, detail card, Markdown rendering, detail/edit sheets
+ReviewTools.swift          ── Detail-panel review: Needs you rules, Claude Haiku extraction, replies to Notes
 BTLog.swift                ── File-based diagnostic logger
 
 Info.plist                 ── App bundle metadata, including the version (set by the release script)
