@@ -16,8 +16,8 @@ A native macOS app for creating, browsing and managing issues in the [beads](htt
     <td align="center"><strong>Browse issues</strong></td>
   </tr>
   <tr>
-    <td><img src="beads-tracker-create.png" alt="Create tab" width="480"/></td>
-    <td><img src="beads-tracker-issues.png" alt="Issues tab" width="480"/></td>
+    <td><img src="docs/images/beads-tracker-create.png" alt="Create tab" width="480"/></td>
+    <td><img src="docs/images/beads-tracker-issues.png" alt="Issues tab" width="480"/></td>
   </tr>
 </table>
 
@@ -95,7 +95,7 @@ Click **Choose…** in the top bar and navigate to any directory that contains a
 
 ### Creating an issue
 
-![Create tab](beads-tracker-create.png)
+![Create tab](docs/images/beads-tracker-create.png)
 
 Click **Create** in the top bar. Fill in at minimum the **Title** field (marked `*`), then press **Create Issue** or hit `⌘↵`.
 
@@ -118,7 +118,7 @@ Field reference:
 
 ### Browsing issues
 
-![Issues tab](beads-tracker-issues.png)
+![Issues tab](docs/images/beads-tracker-issues.png)
 
 The list loads when you choose a repository and then updates live as issues change (the **Live** indicator), re-reading from `bd` every few minutes. Click **Refresh** (↺, `⌘R`) to re-read now.
 
@@ -132,6 +132,8 @@ Live updates use `bd`'s events journal, which the app turns on for each reposito
 ### Reviewing issues
 
 The bar above the detail cards helps you get through long, dense issues.
+
+![The review assistant turns an agent's dense notes into the decision waiting on you](docs/images/beadstracker-review.png)
 
 - **Find in details** (`⌥⌘F`) highlights a word in every section and comment of the issues shown, and counts the matches. (`⌘F` stays the list's search.)
 - **Needs you** adds a box to the top of each card listing the questions and decisions waiting on you, and highlights where they appear in the text. Click it to turn it on for the issues shown; choose **Always Show** from its menu to turn it on for every issue (remembered across relaunches).
@@ -189,6 +191,7 @@ beads-tracker/
 ├── Info.plist               # App bundle metadata
 ├── Makefile                 # Build + icon pipeline
 ├── BeadsTracker.svg         # App icon source
+├── docs/images/             # Screenshots and images used in this README
 └── README.md
 
 See CONTRIBUTING.md for the full layout, including the release workflow and scripts.
