@@ -100,8 +100,8 @@ Key resources:
   `docs:` prefixes and describe the change for a release-notes reader)
 - **Docs:** `README.md`, `ROADMAP.md`, `CONTRIBUTING.md`, `BEADS.md`, `NEW_PROJECT_SETUP.md` (BB
   guidelines template, not app-specific), this `GUIDELINES.md`
-- **Assets:** `BeadsTracker.svg`/`.icns`/`.png`, screenshots (`beads-tracker-create.png`,
-  `beads-tracker-issues.png`)
+- **Assets:** `BeadsTracker.svg`/`.icns`/`.png`, README images in `docs/images/`
+  (`beads-tracker-create.png`, `beads-tracker-issues.png`, `beadstracker-review.png`)
 - **Issue tracker data:** `.beads/` directory (Dolt-backed beads database for this project's own
   issue tracking — accessed via `bd` commands, not direct file edits)
 - **Access:** read/write/edit/execute all permitted on this single data source; no restricted
