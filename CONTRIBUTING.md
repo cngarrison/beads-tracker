@@ -118,6 +118,7 @@ WorkspaceStore.swift       ── Shared in-memory copy of a workspace's issues,
 CreateIssueView.swift      ── CreateIssueView, IssueFormContent, shared form helpers
 IssueListView.swift        ── Issue list, detail card, Markdown rendering, detail/edit sheets
 ReviewTools.swift          ── Detail-panel review: Needs you rules, Claude Haiku extraction, replies to Notes
+FreeformCreate.swift       ── Describe mode: Claude proposes a new issue's fields from plain words
 BTLog.swift                ── File-based diagnostic logger
 
 Info.plist                 ── App bundle metadata, including the version (set by the release script)

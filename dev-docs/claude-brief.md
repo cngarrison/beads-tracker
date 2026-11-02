@@ -11,6 +11,10 @@ This page explains what the app sends, what it expects back, the settings that s
 request, and what can go wrong. The code is in `ReviewTools.swift` (`AnthropicReview`,
 `NeedsYouAI`); the card that shows the brief is `IssueDetailCard` in `IssueListView.swift`.
 
+`AnthropicReview.structured` sends the request, records it and handles the errors described
+below. The create sheet's Describe mode (`FreeformCreate.swift`) uses it too, with its own
+prompt and schema. Its records are saved alongside the briefs as `<time>-new-issue.json`.
+
 ---
 
 ## The flow

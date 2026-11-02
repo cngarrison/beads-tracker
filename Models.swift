@@ -224,11 +224,35 @@ struct IssueFormFields: Codable {
     var acceptanceCriteria = ""
     var dependencies       = ""
     var notes              = ""
+    var parent             = ""   // Create only: parent issue id (bd create --parent)
+    var freeformText       = ""   // Create only: the plain-words description Claude fills the form from
 
     var hasUnsavedContent: Bool {
         !title.isEmpty || !description.isEmpty || !assignee.isEmpty ||
         !labels.isEmpty || !externalRef.isEmpty || !designNotes.isEmpty ||
-        !acceptanceCriteria.isEmpty || !dependencies.isEmpty || !notes.isEmpty
+        !acceptanceCriteria.isEmpty || !dependencies.isEmpty || !notes.isEmpty ||
+        !parent.isEmpty || !freeformText.isEmpty
+    }
+
+    init() {}
+
+    // Drafts saved by older versions lack the newer keys, so every field decodes optionally.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func str(_ key: CodingKeys) -> String { (try? c.decodeIfPresent(String.self, forKey: key)) ?? "" }
+        title              = str(.title)
+        description        = str(.description)
+        issueType          = (try? c.decodeIfPresent(IssueType.self, forKey: .issueType)) ?? .task
+        priority           = (try? c.decodeIfPresent(Priority.self, forKey: .priority)) ?? .p2
+        assignee           = str(.assignee)
+        labels             = str(.labels)
+        externalRef        = str(.externalRef)
+        designNotes        = str(.designNotes)
+        acceptanceCriteria = str(.acceptanceCriteria)
+        dependencies       = str(.dependencies)
+        notes              = str(.notes)
+        parent             = str(.parent)
+        freeformText       = str(.freeformText)
     }
 
     static func from(_ detail: BeadsIssueDetail) -> IssueFormFields {

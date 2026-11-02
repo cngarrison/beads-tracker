@@ -382,6 +382,9 @@ final class WorkspaceStoreRegistry {
         return store
     }
 
+    /// The store already open for `path`, if any, without taking a reference.
+    func existing(_ path: String) -> WorkspaceStore? { entries[path]?.store }
+
     func release(_ path: String) {
         guard let entry = entries[path] else { return }
         if entry.refs > 1 {
