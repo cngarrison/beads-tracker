@@ -38,7 +38,7 @@ keeps that label, so your agents can tell which question it answers. Items that 
 reply like this are marked ✓.
 
 Replies only ever add to Notes; nothing else in the issue changes, and you don't need to open
-the edit sheet.
+the edit sheet. (With the Claude brief, an answer can also make a change you tick; see below.)
 
 ## The Claude brief
 
@@ -50,6 +50,12 @@ With Claude chosen in the settings, the Needs you box becomes a **Brief**:
 - Pick options and add comments on as many items as you like, then click **Record answers in
   Notes** to add them all in one update. The brief is then remade from the new Notes, so the
   items you answered drop out.
+- Some options come with a change to the issue that follows from them, shown under the option
+  once you pick it: for example "Also: Defer until: none → 2026-11-09" for *hold off until next
+  week*, or "Also: Close the issue" for *drop it*. These can change the status, close the
+  issue, set the priority, due or defer date, or add or remove a label. They are ticked; untick
+  any you don't want. Recording then makes the ticked changes (the button says how many) before
+  adding your answers to Notes. A change that would leave the issue as it is isn't offered.
 - Items Claude considers already answered are listed under **Answered**, with the line it took
   as your answer, so you can see why something isn't waiting on you.
 

@@ -44,6 +44,19 @@ struct ReviewItem: Identifiable, Hashable {
 struct ReviewOption: Hashable {
     let label: String
     let detail: String
+    /// Updates Claude suggests making to the issue when this option is picked, unchecked: the
+    /// card checks them against the issue as it is then (`FreeformUpdate.check`).
+    var changes: [SuggestedChange] = []
+}
+
+/// One issue update Claude suggests for a brief option, as Claude returned it.
+struct SuggestedChange: Hashable {
+    let kind: String
+    let value: String
+    let reason: String
+
+    /// In the form `FreeformUpdate.check` reads.
+    var raw: [String: Any] { ["kind": kind, "value": value, "link_type": "", "reason": reason] }
 }
 
 /// Claude's plain-language rewrite of an issue for review.
@@ -475,6 +488,15 @@ enum AnthropicReview {
         - options: the concrete choices, from the text or the obvious ones (for example, go \
         ahead or hold off), each with a short label and a one-sentence consequence. Empty for \
         an open question.
+        - changes: for each option, the updates to the issue itself that picking it implies, \
+        so the issue's state follows the decision; empty when the option needs only the reply. \
+        Kinds and values: status ("open", "in_progress", "blocked" or "deferred"); close (a \
+        short reason, for an option that drops or finishes the issue); priority ("0" critical \
+        to "4" backlog); defer and due (a date as YYYY-MM-DD, worked out from today for \
+        relative dates, or "" to clear; defer hides the issue from ready work until then); \
+        add_label and remove_label (one label each). Suggest only what the option clearly \
+        implies, such as hold off until a date (defer), drop it (close) or make it urgent \
+        (priority), each with a one-sentence reason. Never a change that leaves a value as it is.
         - recommended: the label of the option the text recommends, or "" when it recommends none.
         - quote: a short excerpt copied exactly from the text (one sentence or clause) where \
         the item is raised.
@@ -579,15 +601,34 @@ enum AnthropicReview {
         return (parsed, timing)
     }
 
-    static func brief(issueID: String, title: String, sections: [(String, String)], initials: String, model: String,
-                      effort: String, maxTokens: Int, apiKey: String) async throws -> ReviewBrief {
+    /// Kinds of issue update a brief option may suggest (`UpdateAction.Kind` raw values).
+    static let optionChangeKinds = ["status", "close", "priority", "defer", "due", "add_label", "remove_label"]
+
+    /// `state` is the issue's current fields (status, priority, dates...), so Claude can suggest
+    /// updates that change them.
+    static func brief(issueID: String, title: String, state: String, sections: [(String, String)], initials: String,
+                      model: String, effort: String, maxTokens: Int, apiKey: String) async throws -> ReviewBrief {
         let document = sections
             .map { "<section name=\"\($0.0)\">\n\($0.1)\n</section>" }
             .joined(separator: "\n\n")
+        let changeSchema: [String: Any] = [
+            "type": "object",
+            "properties": [
+                "kind":   ["type": "string", "enum": optionChangeKinds],
+                "value":  ["type": "string"],
+                "reason": ["type": "string"],
+            ],
+            "required": ["kind", "value", "reason"],
+            "additionalProperties": false,
+        ]
         let optionSchema: [String: Any] = [
             "type": "object",
-            "properties": ["label": ["type": "string"], "detail": ["type": "string"]],
-            "required": ["label", "detail"],
+            "properties": [
+                "label": ["type": "string"],
+                "detail": ["type": "string"],
+                "changes": ["type": "array", "items": changeSchema],
+            ],
+            "required": ["label", "detail", "changes"],
             "additionalProperties": false,
         ]
         let itemSchema: [String: Any] = [
@@ -620,7 +661,9 @@ enum AnthropicReview {
         ]
         let (parsed, timing) = try await structured(
             recordID: issueID, task: "review this issue", retry: "Refresh", logCategory: "brief", answerKey: "brief",
-            system: systemPrompt(initials: initials), user: "Issue: \(title)\n\n\(document)", schema: schema,
+            system: systemPrompt(initials: initials),
+            user: "Issue: \(title)\nToday is \(FreeformUpdate.todayLine()).\n\n<state>\n\(state)\n</state>\n\n\(document)",
+            schema: schema,
             model: model, effort: effort, maxTokens: maxTokens, apiKey: apiKey)
 
         func str(_ any: Any?) -> String { ((any as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -631,7 +674,12 @@ enum AnthropicReview {
             guard !title.isEmpty || !quote.isEmpty else { return nil }
             let options = (item["options"] as? [[String: Any]] ?? []).compactMap { o -> ReviewOption? in
                 let label = str(o["label"])
-                return label.isEmpty ? nil : ReviewOption(label: label, detail: str(o["detail"]))
+                let changes = (o["changes"] as? [[String: Any]] ?? []).compactMap { c -> SuggestedChange? in
+                    let kind = str(c["kind"])
+                    return optionChangeKinds.contains(kind)
+                        ? SuggestedChange(kind: kind, value: str(c["value"]), reason: str(c["reason"])) : nil
+                }
+                return label.isEmpty ? nil : ReviewOption(label: label, detail: str(o["detail"]), changes: changes)
             }
             let recommended = str(item["recommended"])
             let label = str(item["label"])
@@ -655,6 +703,8 @@ enum AnthropicReview {
 struct DraftAnswer {
     var choice: String? = nil
     var comment = ""
+    /// Summaries of the chosen option's suggested updates the user unticked.
+    var unticked: Set<String> = []
 
     /// The answer as written to Notes: "Choice. comment", or either alone.
     var text: String {
@@ -729,6 +779,7 @@ final class NeedsYouAI: ObservableObject {
         loadingSince[id] = Date()
         let key = contentKey(for: d)
         let title = d.title
+        let state = briefState(d)
         let sections = reviewSections(d)
         let model = AnthropicReview.model
         let effort = AnthropicReview.effort
@@ -736,7 +787,8 @@ final class NeedsYouAI: ObservableObject {
         let started = Date()
         Task {
             do {
-                var brief = try await AnthropicReview.brief(issueID: id, title: title, sections: sections, initials: initials,
+                var brief = try await AnthropicReview.brief(issueID: id, title: title, state: state, sections: sections,
+                                                            initials: initials,
                                                             model: model, effort: effort, maxTokens: maxTokens,
                                                             apiKey: apiKey)
                 brief.timing?.total = Date().timeIntervalSince(started)
@@ -748,6 +800,19 @@ final class NeedsYouAI: ObservableObject {
             loading.remove(id)
             loadingSince[id] = nil
         }
+    }
+
+    /// The fields an option's suggested updates can change, as they are now.
+    private func briefState(_ d: BeadsIssueDetail) -> String {
+        func day(_ iso: String?) -> String { iso.map { String($0.prefix(10)) } ?? "none" }
+        let labels = d.labels ?? []
+        return [
+            "status: \(d.status)",
+            "priority: \(d.priority)",
+            "labels: \(labels.isEmpty ? "none" : labels.joined(separator: ", "))",
+            "due: \(day(d.due))",
+            "deferred until: \(day(d.deferUntil))",
+        ].joined(separator: "\n")
     }
 
     func draft(_ issueID: String, _ itemID: String) -> DraftAnswer {
@@ -949,6 +1014,8 @@ struct DecisionItemView: View {
     let answered: Bool
     let canReply: Bool
     @Binding var draft: DraftAnswer
+    /// An option's suggested updates, checked against the issue as it is now.
+    var changes: (ReviewOption) -> [UpdateAction] = { _ in [] }
     @State private var showSource = false
 
     var body: some View {
@@ -976,6 +1043,9 @@ struct DecisionItemView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(item.options, id: \.self) { option in
                         optionRow(option)
+                        if draft.choice == option.label {
+                            ForEach(changes(option), id: \.summary) { changeRow($0) }
+                        }
                     }
                 }
             }
@@ -1001,6 +1071,7 @@ struct DecisionItemView: View {
         let selected = draft.choice == option.label
         return Button {
             draft.choice = selected ? nil : option.label
+            draft.unticked = []
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Image(systemName: selected ? "largecircle.fill.circle" : "circle")
@@ -1028,6 +1099,30 @@ struct DecisionItemView: View {
         }
         .buttonStyle(.plain)
         .disabled(!canReply)
+    }
+}
+
+extension DecisionItemView {
+    /// A suggested update under the chosen option, ticked unless the user unticks it; recording
+    /// the answer makes the ticked ones.
+    fileprivate func changeRow(_ a: UpdateAction) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Toggle("", isOn: Binding(
+                get: { !draft.unticked.contains(a.summary) },
+                set: { if $0 { draft.unticked.remove(a.summary) } else { draft.unticked.insert(a.summary) } }))
+                .toggleStyle(.checkbox).labelsHidden()
+                .disabled(!canReply)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Also: \(a.summary)").font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !a.reason.isEmpty {
+                    Text(a.reason).font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(.leading, 22)
+        .help("Untick to record the answer without this change")
     }
 }
 

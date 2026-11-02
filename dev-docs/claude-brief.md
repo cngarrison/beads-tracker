@@ -32,8 +32,11 @@ saved alongside the briefs as `<time>-new-issue.json` and `<time>-<id>-update.js
 4. **Read.** The API guarantees the answer matches a JSON schema (structured outputs). The app
    reads it, tidies it (trims text, drops empty items, keeps `recommended` only if it names one
    of the options) and shows it.
-5. **Answer.** You pick options and/or write comments; **Record answers in Notes** appends one
-   signed, dated line per answer to the issue's Notes in a single `bd update --append-notes`.
+5. **Answer.** You pick options and/or write comments. A picked option's suggested updates are
+   checked against the issue as it is now (`FreeformUpdate.check`, the same checks as Describe
+   changes, so no-ops are dropped) and shown ticked under it. Recording first makes the ticked
+   updates, one `bd` command each (`FreeformUpdate.apply`), then appends one signed, dated line
+   per answer to the issue's Notes in a single `bd update --append-notes`.
 6. **Refresh.** When those Notes arrive (via the live events stream), the brief is remade, and
    the items you answered should drop out.
 
@@ -80,6 +83,15 @@ The user message is the issue title followed by each non-empty section, wrapped 
 
 ```text
 Issue: Persist the workspace cache across launches
+Today is Monday 2026-11-02.
+
+<state>
+status: in_progress
+priority: 2
+labels: none
+due: none
+deferred until: none
+</state>
 
 <section name="Description">
 ...the issue's description, as Markdown...
@@ -102,8 +114,9 @@ Issue: Persist the workspace cache across launches
 </section>
 ```
 
-Only the title and these five text sections are sent. The issue ID, status, priority, type,
-assignee, labels, dates and dependencies are not.
+Only the title, today's date, the fields an option's suggested updates can change (status,
+priority, labels, due and defer dates) and these five text sections are sent. The issue ID,
+type, assignee and dependencies are not.
 
 ### The system prompt
 
@@ -138,6 +151,15 @@ For each item:
 - options: the concrete choices, from the text or the obvious ones (for example, go ahead or
   hold off), each with a short label and a one-sentence consequence. Empty for an open
   question.
+- changes: for each option, the updates to the issue itself that picking it implies, so the
+  issue's state follows the decision; empty when the option needs only the reply. Kinds and
+  values: status ("open", "in_progress", "blocked" or "deferred"); close (a short reason, for
+  an option that drops or finishes the issue); priority ("0" critical to "4" backlog); defer
+  and due (a date as YYYY-MM-DD, worked out from today for relative dates, or "" to clear;
+  defer hides the issue from ready work until then); add_label and remove_label (one label
+  each). Suggest only what the option clearly implies, such as hold off until a date (defer),
+  drop it (close) or make it urgent (priority), each with a one-sentence reason. Never a
+  change that leaves a value as it is.
 - recommended: the label of the option the text recommends, or "" when it recommends none.
 - quote: a short excerpt copied exactly from the text (one sentence or clause) where the item
   is raised.
@@ -182,9 +204,23 @@ guarantees Claude's answer is valid JSON that matches it: every field present, n
               "type": "object",
               "properties": {
                 "label":  { "type": "string" },
-                "detail": { "type": "string" }
+                "detail": { "type": "string" },
+                "changes": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "kind":   { "type": "string", "enum": ["status", "close", "priority", "defer", "due",
+                                                             "add_label", "remove_label"] },
+                      "value":  { "type": "string" },
+                      "reason": { "type": "string" }
+                    },
+                    "required": ["kind", "value", "reason"],
+                    "additionalProperties": false
+                  }
+                }
               },
-              "required": ["label", "detail"],
+              "required": ["label", "detail", "changes"],
               "additionalProperties": false
             }
           },
@@ -222,8 +258,8 @@ guarantees Claude's answer is valid JSON that matches it: every field present, n
       "title": "When should the cache be saved to disk?",
       "context": "Saving on every change made bulk imports noticeably slower. The reviewer suggested two alternatives.",
       "options": [
-        { "label": "Debounce writes", "detail": "Fast imports, with at most a second of changes at risk in a crash." },
-        { "label": "Save only on quit", "detail": "Fastest, but a crash loses the whole session's changes." }
+        { "label": "Debounce writes", "detail": "Fast imports, with at most a second of changes at risk in a crash.", "changes": [] },
+        { "label": "Save only on quit", "detail": "Fastest, but a crash loses the whole session's changes.", "changes": [] }
       ],
       "recommended": "Debounce writes",
       "quote": "either debounce writes or persist only on quit (data loss risk on crash)",
@@ -237,8 +273,8 @@ guarantees Claude's answer is valid JSON that matches it: every field present, n
       "title": "Should the cache be shared between windows?",
       "context": "Two windows on the same repository could share one cache or keep their own.",
       "options": [
-        { "label": "Share it", "detail": "Less memory; both windows see the same data." },
-        { "label": "One per window", "detail": "Simpler, but uses more memory." }
+        { "label": "Share it", "detail": "Less memory; both windows see the same data.", "changes": [] },
+        { "label": "One per window", "detail": "Simpler, but uses more memory.", "changes": [] }
       ],
       "recommended": "Share it",
       "quote": "(2) share the cache across windows on the same repo?",

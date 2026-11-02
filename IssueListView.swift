@@ -1455,23 +1455,56 @@ struct IssueDetailCard: View {
         }
     }
 
+    /// An option's suggested updates, checked against the issue as it is now (ones that would
+    /// change nothing are dropped).
+    private func optionChanges(_ option: ReviewOption) -> [UpdateAction] {
+        FreeformUpdate.check(option.changes.map(\.raw), detail: detail, titles: [:]).actions
+    }
+
+    /// The ticked updates of the drafted answers' chosen options, once each, in run order.
+    private func chosenChanges(_ drafted: [(ReviewItem, DraftAnswer)]) -> [UpdateAction] {
+        var seen = Set<String>()
+        let all = drafted.flatMap { item, draft -> [UpdateAction] in
+            guard let option = item.options.first(where: { $0.label == draft.choice }) else { return [] }
+            return optionChanges(option).filter { !draft.unticked.contains($0.summary) }
+        }
+        return FreeformUpdate.ordered(all.filter { seen.insert($0.summary).inserted })
+    }
+
     private func recordAnswers(_ items: [ReviewItem]) {
         let drafted = draftedItems(items)
         let initials = replyInitials(storedInitials)
         let lines = drafted.map { formatReply($0.1.text, ref: $0.0.replyRef, label: $0.0.label, initials: initials) }
+        let changes = chosenChanges(drafted)
         let issueID = detail.id
+        let d = detail
         isRecording = true
         recordError = nil
-        // Marked before appending: the change's event can arrive before the append returns.
-        ai.refreshAfterNextChange(issueID)
         Task {
+            // The updates go first, one bd command each; a failure doesn't stop the rest or the
+            // answers. They don't change the brief's content, so only the Notes append below
+            // brings a new brief.
+            var failures: [String] = []
+            if let dir = workingDirectory {
+                for a in changes {
+                    do {
+                        try await Task.detached { try FreeformUpdate.apply(a, to: d, workingDirectory: dir) }.value
+                    } catch {
+                        failures.append("\(a.summary): \(error.localizedDescription)")
+                    }
+                }
+            }
+            // Marked before appending: the change's event can arrive before the append returns.
+            ai.refreshAfterNextChange(issueID)
             do {
                 try await appendToNotes(lines)
                 ai.clearDrafts(issueID, drafted.map { $0.0.id })
             } catch {
                 ai.refreshAfterNextChange(issueID, false)
-                recordError = error.localizedDescription
+                failures.append(error.localizedDescription)
+                if !changes.isEmpty { onNotesAppended?() }   // still show the changes that were made
             }
+            recordError = failures.isEmpty ? nil : failures.joined(separator: "\n")
             isRecording = false
         }
     }
@@ -1798,7 +1831,8 @@ struct IssueDetailCard: View {
                                      answered: false,
                                      canReply: workingDirectory != nil,
                                      draft: Binding(get: { ai.draft(issueID, item.id) },
-                                                    set: { ai.setDraft($0, issueID, item.id) }))
+                                                    set: { ai.setDraft($0, issueID, item.id) }),
+                                     changes: optionChanges)
                 }
                 if !answered.isEmpty {
                     DisclosureGroup(isExpanded: $showAnswered) {
@@ -1833,7 +1867,9 @@ struct IssueDetailCard: View {
                 }
             }
             if usesAI, workingDirectory != nil, !items.isEmpty {
-                let count = draftedItems(items.filter { !isAnswered($0, notes: detail.notes) }).count
+                let drafted = draftedItems(items.filter { !isAnswered($0, notes: detail.notes) })
+                let count = drafted.count
+                let changeCount = chosenChanges(drafted).count
                 HStack {
                     if let recordError {
                         Text(recordError).font(.caption).foregroundStyle(.red)
@@ -1845,13 +1881,14 @@ struct IssueDetailCard: View {
                         if isRecording {
                             ProgressView().scaleEffect(0.6)
                         } else {
-                            Text(count <= 1 ? "Record answer in Notes" : "Record \(count) answers in Notes")
+                            Text(recordLabel(answers: count, changes: changeCount))
                         }
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
                     .disabled(isRecording || count == 0)
-                    .help("Append your answers to Notes in one update, each signed and dated")
+                    .help(changeCount == 0 ? "Append your answers to Notes in one update, each signed and dated"
+                          : "Make the ticked changes, then append your answers to Notes, each signed and dated")
                 }
             }
             if usesAI, let timing = ai.brief(for: detail)?.timing {
@@ -1866,6 +1903,15 @@ struct IssueDetailCard: View {
         .padding(10)
         .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.orange.opacity(0.35)))
+    }
+
+    private func recordLabel(answers: Int, changes: Int) -> String {
+        let record = answers <= 1 ? "Record answer" : "Record \(answers) answers"
+        switch changes {
+        case 0:  return record + " in Notes"
+        case 1:  return record + " and make 1 change"
+        default: return record + " and make \(changes) changes"
+        }
     }
 
     /// Shows the saved request and response for a brief (a JSON file) in the Finder.
