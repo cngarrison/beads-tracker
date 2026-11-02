@@ -1399,6 +1399,7 @@ struct IssueDetailCard: View {
     @AppStorage("needsYouSource") private var needsYouSource: String = "rules"
     @ObservedObject private var ai = NeedsYouAI.shared
     @State private var isRecording = false
+    @State private var showAnswered = false
     @State private var recordError: String? = nil
 
     private static let noteReplyID = "\u{1F}note"
@@ -1413,8 +1414,9 @@ struct IssueDetailCard: View {
         return heuristicReviewItems(detail, initials: replyInitials(storedInitials))
     }
 
+    /// Quotes to highlight in a section: the items still waiting on you.
     private func flagged(_ section: String, in items: [ReviewItem]) -> [String] {
-        items.filter { $0.section == section }.map(\.quote)
+        items.filter { $0.section == section && !isAnswered($0, notes: detail.notes) }.map(\.quote)
     }
 
     private func appendReply(_ answer: String, ref: String?, label: String? = nil) async throws {
@@ -1740,8 +1742,9 @@ struct IssueDetailCard: View {
                     Text("Built-in rules").font(.caption2).foregroundStyle(.secondary)
                 }
             }
-            if usesAI, let message = ai.error(for: detail) {
-                Text(message).font(.caption).foregroundStyle(.red)
+            if usesAI, let error = ai.error(for: detail) {
+                Text(error.message).font(.caption).foregroundStyle(.red)
+                if let url = error.recordURL { recordLink(url) }
             }
             if usesAI, ai.isStale(detail), !ai.isLoading(detail) {
                 HStack(spacing: 6) {
@@ -1756,18 +1759,40 @@ struct IssueDetailCard: View {
                 BriefSummaryView(brief: brief)
                 if !items.isEmpty { Divider() }
             }
-            if items.isEmpty, !usesAI || ai.brief(for: detail) != nil {
-                Text("Nothing is waiting on you.").font(.caption).foregroundStyle(.secondary)
-            }
-            ForEach(items) { item in
-                if usesAI {
+            if usesAI {
+                // Claude also returns what it judged already answered, so an empty list explains itself.
+                let open = items.filter { !isAnswered($0, notes: detail.notes) }
+                let answered = items.filter { isAnswered($0, notes: detail.notes) }
+                if open.isEmpty, ai.brief(for: detail) != nil {
+                    Text(answered.isEmpty ? "Nothing is waiting on you." : "Nothing is waiting on you: everything is answered.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(open) { item in
                     let issueID = detail.id
                     DecisionItemView(item: item,
-                                     answered: isAnswered(item, notes: detail.notes),
+                                     answered: false,
                                      canReply: workingDirectory != nil,
                                      draft: Binding(get: { ai.draft(issueID, item.id) },
                                                     set: { ai.setDraft($0, issueID, item.id) }))
-                } else {
+                }
+                if !answered.isEmpty {
+                    DisclosureGroup(isExpanded: $showAnswered) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(answered) { item in
+                                AnsweredItemRow(item: item)
+                            }
+                        }
+                        .padding(.top, 4)
+                    } label: {
+                        Text("Answered (\(answered.count))").font(.caption).fontWeight(.medium)
+                    }
+                    .help("Items Claude judged already answered, with the answer it found")
+                }
+            } else {
+                if items.isEmpty {
+                    Text("Nothing is waiting on you.").font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(items) { item in
                     VStack(alignment: .leading, spacing: 6) {
                         ReviewItemRow(item: item,
                                       answered: isAnswered(item, notes: detail.notes),
@@ -1783,14 +1808,14 @@ struct IssueDetailCard: View {
                 }
             }
             if usesAI, workingDirectory != nil, !items.isEmpty {
-                let count = draftedItems(items).count
+                let count = draftedItems(items.filter { !isAnswered($0, notes: detail.notes) }).count
                 HStack {
                     if let recordError {
                         Text(recordError).font(.caption).foregroundStyle(.red)
                     }
                     Spacer()
                     Button {
-                        recordAnswers(items)
+                        recordAnswers(items.filter { !isAnswered($0, notes: detail.notes) })
                     } label: {
                         if isRecording {
                             ProgressView().scaleEffect(0.6)
@@ -1805,14 +1830,27 @@ struct IssueDetailCard: View {
                 }
             }
             if usesAI, let timing = ai.brief(for: detail)?.timing {
-                Label(timing.summary, systemImage: "stopwatch")
-                    .font(.caption2).foregroundStyle(.tertiary)
-                    .help(timing.detail)
+                HStack(spacing: 8) {
+                    Label(timing.summary, systemImage: "stopwatch")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                        .help(timing.detail)
+                    if let url = timing.recordURL { recordLink(url) }
+                }
             }
         }
         .padding(10)
         .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.orange.opacity(0.35)))
+    }
+
+    /// Shows the saved request and response for a brief (a JSON file) in the Finder.
+    private func recordLink(_ url: URL) -> some View {
+        Button("Request & response") {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        }
+        .buttonStyle(.link)
+        .font(.caption2)
+        .help("Show this brief's saved request and response in the Finder: \(url.lastPathComponent)")
     }
 
     private var statusBadge: some View {

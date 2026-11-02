@@ -27,6 +27,8 @@ struct ReviewItem: Identifiable, Hashable {
     var recommended: String? = nil   // label of the option the text recommends
     /// The item's own number or letter in the issue, e.g. "(3)", "2.", "b)" or "Q4".
     var label: String? = nil
+    /// From Claude's brief: the line that already answers this item, when Claude judged it answered.
+    var answeredBy: String? = nil
     var id: String { section + "\u{1F}" + quote }
     /// What a reply's "(re: ...)" names: the plain question when there is one.
     var replyRef: String { title ?? quote }
@@ -67,6 +69,7 @@ struct BriefTiming {
     var inputTokens: Int? = nil
     var outputTokens: Int? = nil         // includes the model's thinking
     var requestID: String? = nil
+    var recordURL: URL? = nil            // the saved request/response (BriefRecorder)
 
     /// Time spent in the app itself: everything except the HTTP call.
     var app: TimeInterval { max(0, total - request) }
@@ -195,6 +198,7 @@ func replyReference(_ ref: String, label: String?) -> String {
 
 /// True when the notes already hold a reply that references this item.
 func isAnswered(_ item: ReviewItem, notes: String?) -> Bool {
+    if item.answeredBy != nil { return true }
     guard let notes, !notes.isEmpty else { return false }
     var key = replyReference(item.replyRef, label: item.label)
     if key.hasSuffix("\u{2026}\"") { key.removeLast(2) }
@@ -323,7 +327,56 @@ func heuristicReviewItems(_ d: BeadsIssueDetail, initials: String) -> [ReviewIte
 
 struct ReviewError: LocalizedError {
     let message: String
+    /// The saved request/response for this brief, when one was written.
+    var recordURL: URL? = nil
     var errorDescription: String? { message }
+}
+
+/// Saves each brief's full request and raw response as JSON, so a surprising brief can be
+/// inspected and compared with another run. Files go to ~/Library/Logs/BeadsTracker/briefs/;
+/// the newest 200 are kept.
+enum BriefRecorder {
+    static let directory: URL = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Logs/BeadsTracker/briefs", isDirectory: true)
+    private static let keep = 200
+
+    static func save(issueID: String, request: [String: Any], response: Any?, error: String?,
+                     timing: BriefTiming) -> URL? {
+        let fm = FileManager.default
+        try? fm.createDirectory(at: directory, withIntermediateDirectories: true)
+        let stamp: String = {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.dateFormat = "yyyyMMdd-HHmmss"
+            return f.string(from: Date())
+        }()
+        let safeID = issueID.replacingOccurrences(of: "/", with: "_")
+        let url = directory.appendingPathComponent("\(stamp)-\(safeID).json")
+        var record: [String: Any] = [
+            "issue_id": issueID,
+            "saved_at": ISO8601DateFormatter().string(from: Date()),
+            "timing": timing.logLine,
+            "request": request,
+        ]
+        if let response { record["response"] = response }
+        if let error { record["error"] = error }
+        guard JSONSerialization.isValidJSONObject(record),
+              let data = try? JSONSerialization.data(withJSONObject: record,
+                                                     options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]),
+              (try? data.write(to: url)) != nil
+        else { return nil }
+        prune()
+        return url
+    }
+
+    private static func prune() {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .filter({ $0.pathExtension == "json" })
+            .sorted(by: { $0.lastPathComponent > $1.lastPathComponent }),
+              files.count > keep else { return }
+        for old in files.dropFirst(keep) { try? fm.removeItem(at: old) }
+    }
 }
 
 enum AnthropicReview {
@@ -366,8 +419,17 @@ enum AnthropicReview {
 
     /// Sends a request; returns the JSON body, or throws the API's error message.
     private static func send(_ req: URLRequest, delegate: URLSessionTaskDelegate? = nil) async throws -> [String: Any] {
+        let (data, status) = try await sendRaw(req, delegate: delegate)
+        return try checked(data, status: status)
+    }
+
+    private static func sendRaw(_ req: URLRequest, delegate: URLSessionTaskDelegate? = nil) async throws -> (Data, Int) {
         let (data, response) = try await URLSession.shared.data(for: req, delegate: delegate)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        return (data, (response as? HTTPURLResponse)?.statusCode ?? 0)
+    }
+
+    /// The response body as JSON, or the API's error message as a thrown error.
+    private static func checked(_ data: Data, status: Int) throws -> [String: Any] {
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         guard status == 200, let json else {
             let message = ((json?["error"] as? [String: Any])?["message"] as? String) ?? "HTTP \(status)"
@@ -395,14 +457,17 @@ enum AnthropicReview {
         points: up to five short bullets with the facts that matter most (what was done, what is \
         left, risks). Leave it empty when the summary already covers them.
 
-        items: everything that waits on \(who): questions to answer, decisions or choices, \
-        approvals or sign-offs, and requests for direction. Include findings or follow-ups that \
-        need \(who) to decide what happens next even when they are not phrased as questions. \
-        Not items: work the agents will do themselves, rhetorical questions, and anything \(who) \
-        has already answered. \(who)'s answers appear as lines starting "\(who) YYYY-MM-DD", \
-        "\(who) decision" or "From \(who)", often with (re: "...") naming the question; an item \
-        answered there is settled, even when the text around it still mentions it. Keep the \
-        items in document order, and return none when nothing waits on \(who).
+        items: every question, decision or choice, approval or sign-off, and request for \
+        direction the issue puts to \(who), whether or not \(who) has answered it yet. Include \
+        findings or follow-ups that need \(who) to decide what happens next even when they are \
+        not phrased as questions. Not items: work the agents will do themselves, and rhetorical \
+        questions. Keep the items in document order; return none only when the issue puts \
+        nothing to \(who) at all.
+
+        \(who)'s answers appear as lines starting "\(who) YYYY-MM-DD", "\(who) decision" or \
+        "From \(who)", often with (re: "...") naming the question they answer. Mark an item \
+        answered only when such a line clearly answers that specific item; answering a related \
+        or earlier question does not count. When in doubt, it is open.
 
         For each item:
         - title: the question as one plain sentence ending in "?".
@@ -414,14 +479,16 @@ enum AnthropicReview {
         - quote: a short excerpt copied exactly from the text (one sentence or clause) where \
         the item is raised.
         - section: the section that quote is in.
+        - status: "answered" when one of \(who)'s lines answers it, otherwise "open".
+        - answered_by: for an answered item, that line of \(who)'s, copied exactly; "" when open.
         - label: the item's own number or letter where the text raises it, copied exactly \
         ("(3)", "2.", "b)", "Q4"), so \(who)'s answer can name it; "" when it has none. When \
         one numbered line or paragraph holds several questions, give each its own number.
         """
     }
 
-    static func brief(title: String, sections: [(String, String)], initials: String, model: String, effort: String,
-                      maxTokens: Int, apiKey: String) async throws -> ReviewBrief {
+    static func brief(issueID: String, title: String, sections: [(String, String)], initials: String, model: String,
+                      effort: String, maxTokens: Int, apiKey: String) async throws -> ReviewBrief {
         var timing = BriefTiming(model: model, effort: effort, maxTokens: maxTokens)
         let started = Date()
         var req = request("messages", apiKey: apiKey)
@@ -447,8 +514,11 @@ enum AnthropicReview {
                 "quote":       ["type": "string"],
                 "section":     ["type": "string", "enum": reviewSectionNames],
                 "label":       ["type": "string"],
+                "status":      ["type": "string", "enum": ["open", "answered"]],
+                "answered_by": ["type": "string"],
             ],
-            "required": ["kind", "title", "context", "options", "recommended", "quote", "section", "label"],
+            "required": ["kind", "title", "context", "options", "recommended", "quote", "section", "label",
+                         "status", "answered_by"],
             "additionalProperties": false,
         ]
         let schema: [String: Any] = [
@@ -474,12 +544,30 @@ enum AnthropicReview {
 
         let collector = TaskMetricsCollector()
         let sent = Date()
+        // Every outcome below saves the request and what came back (BriefRecorder).
+        func record(_ response: Any?, error: String?) -> URL? {
+            BriefRecorder.save(issueID: issueID, request: body, response: response, error: error, timing: timing)
+        }
+        func fail(_ message: String, response: Any?) -> ReviewError {
+            ReviewError(message: message, recordURL: record(response, error: message))
+        }
         let json: [String: Any]
         do {
-            json = try await send(req, delegate: collector)
-        } catch {
-            BTLog.log("failed model=\(model) effort=\(effort) max_tokens=\(maxTokens) after \(Int(Date().timeIntervalSince(sent) * 1000))ms: \(error.localizedDescription)", category: "brief")
+            let (data, status) = try await sendRaw(req, delegate: collector)
+            do {
+                json = try checked(data, status: status)
+            } catch {
+                timing.request = Date().timeIntervalSince(sent)
+                let raw: Any = (try? JSONSerialization.jsonObject(with: data)) ?? String(decoding: data, as: UTF8.self)
+                BTLog.log("failed \(timing.logLine): \(error.localizedDescription)", category: "brief")
+                throw fail(error.localizedDescription, response: raw)
+            }
+        } catch let error as ReviewError {
             throw error
+        } catch {
+            timing.request = Date().timeIntervalSince(sent)
+            BTLog.log("failed \(timing.logLine): \(error.localizedDescription)", category: "brief")
+            throw fail(error.localizedDescription, response: nil)
         }
         let received = Date()
         timing.request = received.timeIntervalSince(sent)
@@ -503,18 +591,18 @@ enum AnthropicReview {
         switch json["stop_reason"] as? String {
         case "refusal":
             BTLog.log("refused \(timing.logLine)", category: "brief")
-            throw ReviewError(message: "Claude declined to review this issue.")
+            throw fail("Claude declined to review this issue.", response: json)
         case "max_tokens":
             BTLog.log("cut off \(timing.logLine)", category: "brief")
-            throw ReviewError(message: "Claude's answer was cut off at the \(maxTokens.formatted())-token output limit "
+            throw fail("Claude's answer was cut off at the \(maxTokens.formatted())-token output limit "
                 + "(its thinking counts toward the limit) after \(BriefTiming.secs(timing.request)). "
-                + "Raise Output limit or lower Effort in Review settings, then Refresh.")
+                + "Raise Output limit or lower Effort in Review settings, then Refresh.", response: json)
         default: break
         }
         let blocks = json["content"] as? [[String: Any]] ?? []
         guard let text = blocks.first(where: { $0["type"] as? String == "text" })?["text"] as? String,
               let parsed = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any]
-        else { throw ReviewError(message: "Claude returned an unreadable answer.") }
+        else { throw fail("Claude returned an unreadable answer.", response: json) }
 
         func str(_ any: Any?) -> String { ((any as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
         let items: [ReviewItem] = (parsed["items"] as? [[String: Any]] ?? []).compactMap { item in
@@ -528,16 +616,23 @@ enum AnthropicReview {
             }
             let recommended = str(item["recommended"])
             let label = str(item["label"])
+            let answeredBy = str(item["answered_by"])
+            let answered = str(item["status"]) == "answered"
             return ReviewItem(section: str(item["section"]), kind: kind,
                               quote: quote.isEmpty ? title : quote,
                               title: title.isEmpty ? nil : title,
                               context: str(item["context"]),
                               options: options,
                               recommended: options.contains { $0.label == recommended } ? recommended : nil,
-                              label: label.isEmpty ? itemLabel(quote) : label)
+                              label: label.isEmpty ? itemLabel(quote) : label,
+                              answeredBy: answered ? (answeredBy.isEmpty ? "(answered, no line given)" : answeredBy) : nil)
         }
         let points = (parsed["points"] as? [String] ?? []).map { str($0) }.filter { !$0.isEmpty }
         timing.parse = Date().timeIntervalSince(received)
+        // Saved with the answer parsed out of its text block, so the brief reads as JSON.
+        var saved = json
+        saved["brief"] = parsed
+        timing.recordURL = record(saved, error: nil)
         return ReviewBrief(summary: str(parsed["summary"]), points: points, items: items, timing: timing)
     }
 }
@@ -571,7 +666,7 @@ final class NeedsYouAI: ObservableObject {
     @Published private var briefs: [String: Stored] = [:]        // by issue id
     @Published private var loading: Set<String> = []
     private var loadingSince: [String: Date] = [:]
-    @Published private var errors: [String: String] = [:]
+    @Published private var errors: [String: ReviewError] = [:]
     @Published private var drafts: [String: [String: DraftAnswer]] = [:]   // issue id -> item id
     /// Issues whose brief is remade when their content next changes (answers just recorded).
     private var refreshOnChange: Set<String> = []
@@ -586,7 +681,7 @@ final class NeedsYouAI: ObservableObject {
     func brief(for d: BeadsIssueDetail) -> ReviewBrief? { briefs[d.id]?.brief }
     func isLoading(_ d: BeadsIssueDetail) -> Bool { loading.contains(d.id) }
     func loadingSince(_ d: BeadsIssueDetail) -> Date? { loadingSince[d.id] }
-    func error(for d: BeadsIssueDetail) -> String? { errors[d.id] }
+    func error(for d: BeadsIssueDetail) -> ReviewError? { errors[d.id] }
     func isStale(_ d: BeadsIssueDetail) -> Bool {
         briefs[d.id].map { $0.contentKey != contentKey(for: d) } ?? false
     }
@@ -612,7 +707,7 @@ final class NeedsYouAI: ObservableObject {
         let id = d.id
         guard !loading.contains(id) else { return }
         guard let apiKey = AnthropicKeychain.load() else {
-            errors[id] = "No Anthropic API key saved (Review settings)."
+            errors[id] = ReviewError(message: "No Anthropic API key saved (Review settings).")
             return
         }
         errors[id] = nil
@@ -627,14 +722,14 @@ final class NeedsYouAI: ObservableObject {
         let started = Date()
         Task {
             do {
-                var brief = try await AnthropicReview.brief(title: title, sections: sections, initials: initials,
+                var brief = try await AnthropicReview.brief(issueID: id, title: title, sections: sections, initials: initials,
                                                             model: model, effort: effort, maxTokens: maxTokens,
                                                             apiKey: apiKey)
                 brief.timing?.total = Date().timeIntervalSince(started)
                 if let timing = brief.timing { BTLog.log("\(id) \(timing.logLine)", category: "brief") }
                 briefs[id] = Stored(brief: brief, contentKey: key)
             } catch {
-                errors[id] = error.localizedDescription
+                errors[id] = (error as? ReviewError) ?? ReviewError(message: error.localizedDescription)
             }
             loading.remove(id)
             loadingSince[id] = nil
@@ -919,6 +1014,26 @@ struct DecisionItemView: View {
         }
         .buttonStyle(.plain)
         .disabled(!canReply)
+    }
+}
+
+/// An item Claude judged already answered, with the line it took as the answer.
+struct AnsweredItemRow: View {
+    let item: ReviewItem
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.displayText)
+                    .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(item.answeredBy.map { "Answered: \u{201C}\($0)\u{201D}" } ?? "Answered by your reply in Notes")
+                    .font(.caption).italic().foregroundStyle(.secondary)
+                    .lineLimit(3)
+                    .textSelection(.enabled)
+            }
+        }
     }
 }
 

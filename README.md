@@ -162,6 +162,8 @@ With Claude, the box becomes a **Brief**:
 - Each item waiting on you as a plain question with its background and the options to choose from, the recommended one marked. **Show source** shows the original text.
 - Pick options and add comments on as many items as you like, then **Record answers in Notes** to add them all in one update. The brief is then remade from the new Notes, so answered items drop out.
 - A brief is made once per issue. If the issue changes some other way, the brief says it is out of date; ↺ or **Refresh** makes a new one.
+- Items Claude considers already answered are listed under **Answered**, with the line it took as your answer, so you can see why something isn't waiting on you.
+- **Request & response** shows the brief's saved request and Claude's raw answer (a JSON file in `~/Library/Logs/BeadsTracker/briefs/`), for checking a surprising brief.
 - A stopwatch line under the brief shows how long it took and where the time went (hover for connecting, waiting for Claude, the app, and tokens). Each brief is also logged under `[brief]` in `~/Library/Logs/BeadsTracker/beads-tracker.log`.
 
 ---
