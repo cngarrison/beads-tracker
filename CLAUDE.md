@@ -17,6 +17,7 @@ no database or API layer of its own. The project tracks its own development in `
   (shared per-workspace in-memory issue store, patched from events), `ReviewTools.swift`
   (detail-panel "Needs you" review, replies appended to Notes, optional Claude Haiku),
   `FreeformCreate.swift` (create sheet's Describe mode: Claude proposes the form's fields),
+  `FreeformUpdate.swift` (detail card's Describe changes: proposed changes as a checklist),
   `BTLog.swift`
 - **Build/config:** `Makefile`, `Info.plist`, `BeadsTracker.entitlements`, `.github/` (release
   workflow), `scripts/release-version.sh`, `scripts/release-notes.sh`, `.githooks/`

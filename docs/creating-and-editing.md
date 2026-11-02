@@ -87,6 +87,53 @@ The sheet also has:
 - **Comments**: type a comment and click **Add**. If you click **Save** with a comment typed but
   not added, the app asks whether to add it or discard it.
 
+## Describing changes in your own words
+
+With an Anthropic API key saved, the wand button beside the note button on a card opens
+**Describe changes**. Write what you want in plain words, for example *"bump to P1, this
+blocks bt-elk, defer to next week"*, and click **Propose Changes** (`⌘↵`).
+
+Claude proposes a list of single changes, each with a checkbox, saying what changes from what
+to what, and a line on why:
+
+| Change | Made with |
+|---|---|
+| Title, type, priority, assignee | `bd update --title / --type / --priority / --assignee` |
+| Add to, or replace, the description, design or acceptance criteria | `bd update --description / --design / --acceptance` |
+| Status (open, in progress, blocked, deferred) | `bd update --status` |
+| Close, with a reason | `bd close --reason` |
+| Add or remove a label | `bd update --add-label / --remove-label` |
+| Due or defer date, set or cleared | `bd update --due / --defer` |
+| Parent, set or removed | `bd update --parent` |
+| Link: blocked by, blocks, related, discovered from | `bd link` |
+| Remove a link | `bd dep remove` |
+| Your request, signed and dated | `bd update --append-notes` |
+
+Untick anything you don't want, then click **Apply** (`⌘↵`). Each change runs as its own
+`bd` command, in that order, with closing last. Each row shows a ✓ or ✗; a failed change
+shows `bd`'s error, and the rest still run. **Edit Request** goes back to your text.
+
+- **Your request is kept.** A change near the end of the list appends it to Notes as a signed, dated line
+  (`CNG 2026-11-02: bump to P1, …`), like a [reply](reviewing.md#reply-in-notes). Untick it if
+  you don't want it.
+- **Text fields.** "Add a criterion: all leaked keys are rotated" adds a line to the end of
+  the acceptance criteria, in the same style as the lines already there. Claude replaces a
+  whole field only when you ask it to rewrite or replace it. It never does that to a field
+  longer than 4,000 characters, since Claude only sees the start of one that long.
+- **Dates.** Relative dates ("next week", "Friday") are worked out from today and shown as
+  dates.
+- **What's left out.** Changes that would leave things as they are (already P1, already
+  linked), ids that weren't in the issue list sent to Claude, and values the app doesn't set
+  are listed under **Left out**. A change you asked for that Claude couldn't make is listed
+  under **Not turned into a change**. Background such as reasons or timing isn't listed there,
+  since it is already in the Notes line with your request.
+
+This sends your request, the issue's fields and links, its description, design and acceptance
+criteria, the end of its notes, and the same
+issue list as [describing a new issue](#describing-an-issue-in-your-own-words) to the Anthropic
+API, using the review settings. Each request is saved in `~/Library/Logs/BeadsTracker/briefs/`
+(files ending `-update.json`). The text you type is not kept as a draft if you quit.
+
 ## Changing status
 
 With one issue selected, the **Status** menu in the detail panel's toolbar sets it to Open, In

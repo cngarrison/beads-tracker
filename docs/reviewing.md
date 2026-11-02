@@ -71,8 +71,9 @@ The gear on the review bar holds the review settings:
 
 - **Sign replies as**: your initials. By default, the initials of your macOS account name.
 - **Find questions and decisions with**: the **built-in rules** or **Claude**.
-- **Anthropic API key**: needed for Claude, here and in the create sheet's **Describe** mode
-  (see [Creating and editing issues](creating-and-editing.md#describing-an-issue-in-your-own-words)).
+- **Anthropic API key**: needed for Claude, here, in the create sheet's **Describe** mode and
+  in **Describe changes** on a card (see
+  [Creating and editing issues](creating-and-editing.md#describing-an-issue-in-your-own-words)).
   It is kept in your Keychain; **Remove** deletes it. Model, Effort and Output limit apply to
   both.
 - **Model**: Claude Haiku (`claude-haiku-5-5`) by default. The menu lists the models your key
