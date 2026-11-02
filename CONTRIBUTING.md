@@ -19,7 +19,7 @@ Please keep it that way: add to the existing files where a change fits, and open
 ### Without writing any code
 - **File a bug** — run `bd create` in this repo and describe what’s wrong
 - **Suggest a feature** — check `bd list` and [ROADMAP.md](ROADMAP.md) first, then `bd create` if it’s new
-- **Improve the docs** — README, ROADMAP, and this file are all fair game
+- **Improve the docs** — the user guide in [docs/](docs/README.md) (how to use the app), the developer notes in [dev-docs/](dev-docs/) (how it works inside), README, ROADMAP, and this file are all fair game
 - **Test on your hardware** — especially Intel Macs and different macOS versions
 
 ### With code
@@ -128,9 +128,11 @@ BeadsTracker.svg           ── App icon source (edit to change the icon)
 .github/workflows/         ── release.yml: build, sign, notarize and publish on version tags
 scripts/release-version.sh ── Bump version, tag and push a release
 scripts/release-notes.sh   ── Release notes from the commits since the previous tag
-README.md                  ── User-facing docs
-docs/images/               ── Screenshots and images used in README.md
-dev-docs/                  ── Developer notes, e.g. claude-brief.md: how the Claude brief works
+README.md                  ── Overview, screenshots, install, links into docs/
+docs/                      ── User guide: how to use the app (README.md is its index)
+docs/images/               ── Screenshots used in README.md and docs/
+dev-docs/                  ── Developer notes: claude-brief.md (how the Claude brief works),
+                              how-it-was-built.md (project history)
 ROADMAP.md                 ── Feature ideas and backlog
 BEADS.md                   ── Quick reference for agents using `bd` in this repo
 CONTRIBUTING.md            ── This file

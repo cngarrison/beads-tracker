@@ -18,8 +18,9 @@ no database or API layer of its own. The project tracks its own development in `
   (detail-panel "Needs you" review, replies appended to Notes, optional Claude Haiku), `BTLog.swift`
 - **Build/config:** `Makefile`, `Info.plist`, `BeadsTracker.entitlements`, `.github/` (release
   workflow), `scripts/release-version.sh`, `scripts/release-notes.sh`, `.githooks/`
-- **Docs:** `README.md`, `ROADMAP.md`, `CONTRIBUTING.md` (keep its project layout and conventions
-  in step with the code), `BEADS.md`
+- **Docs:** `README.md` (overview, install, links), `docs/` (user guide: how to use the app; keep
+  it in step with user-visible changes), `dev-docs/` (developer notes), `ROADMAP.md`,
+  `CONTRIBUTING.md` (keep its project layout and conventions in step with the code), `BEADS.md`
 
 Out of scope: changing the `bd` CLI itself, non-macOS platforms, and backend/server work (no
 `bd serve`/HTTP transport is used).
