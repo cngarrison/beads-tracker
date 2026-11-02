@@ -130,6 +130,7 @@ scripts/release-version.sh ── Bump version, tag and push a release
 scripts/release-notes.sh   ── Release notes from the commits since the previous tag
 README.md                  ── User-facing docs
 docs/images/               ── Screenshots and images used in README.md
+dev-docs/                  ── Developer notes, e.g. claude-brief.md: how the Claude brief works
 ROADMAP.md                 ── Feature ideas and backlog
 BEADS.md                   ── Quick reference for agents using `bd` in this repo
 CONTRIBUTING.md            ── This file
