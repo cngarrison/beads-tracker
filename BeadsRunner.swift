@@ -191,6 +191,17 @@ enum BeadsRunner {
         }
     }
 
+    // MARK: Update Flags
+
+    /// `bd update <id> <flags>`, for one change at a time (e.g. `["--priority", "1"]`).
+    static func update(id: String, flags: [String], workingDirectory: String) throws {
+        let (stdout, stderr, status) = try run(["bd", "update", id] + flags, in: workingDirectory)
+        if status != 0 {
+            let msg = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            throw BeadsError.commandFailed(msg.isEmpty ? stdout : msg)
+        }
+    }
+
     // MARK: Append Notes
 
     /// Append text to an issue's notes (`bd update --append-notes` adds it on a new line).
@@ -246,8 +257,9 @@ enum BeadsRunner {
 
     // MARK: Close
 
-    static func close(id: String, workingDirectory: String) throws {
-        let (stdout, stderr, status) = try run(["bd", "close", id], in: workingDirectory)
+    static func close(id: String, reason: String = "", workingDirectory: String) throws {
+        let args = ["bd", "close", id] + (reason.isEmpty ? [] : ["--reason", reason])
+        let (stdout, stderr, status) = try run(args, in: workingDirectory)
         if status != 0 {
             let msg = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             throw BeadsError.commandFailed(msg.isEmpty ? stdout : msg)

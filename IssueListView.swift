@@ -1395,6 +1395,7 @@ struct IssueDetailCard: View {
     @State private var isHoveringID = false
     /// The item being replied to; `noteReplyID` for a free note.
     @State private var replyingTo: String? = nil
+    @State private var describingChanges = false
     @AppStorage("replyInitials") private var storedInitials: String = ""
     @AppStorage("needsYouSource") private var needsYouSource: String = "rules"
     @ObservedObject private var ai = NeedsYouAI.shared
@@ -1526,6 +1527,13 @@ struct IssueDetailCard: View {
                         }
                         .buttonStyle(.borderless)
                         .help("Add a signed, dated note to \(detail.id)")
+                        Button {
+                            describingChanges = true
+                        } label: {
+                            Image(systemName: "wand.and.stars")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Describe changes to \(detail.id) in your own words; Claude proposes them for you to tick")
                     }
                     if let onEdit {
                         Button(action: onEdit) {
@@ -1616,6 +1624,12 @@ struct IssueDetailCard: View {
                 NoteReplyEditor(prefix: "\(replyInitials(storedInitials)) \(replyDateStamp()):",
                                 onSubmit: { try await appendReply($0, ref: nil) },
                                 onCancel: { replyingTo = nil })
+            }
+
+            if describingChanges, let dir = workingDirectory {
+                FreeformUpdatePanel(detail: detail, workingDirectory: dir, initials: replyInitials(storedInitials),
+                                    onApplied: { onNotesAppended?() },
+                                    onClose: { describingChanges = false })
             }
 
             if needsYouMode {

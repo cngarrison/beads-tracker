@@ -43,6 +43,8 @@ dependencies, children and dates. On a card:
   [Editing an issue](creating-and-editing.md#editing-an-issue)
 - the note button adds a signed, dated line to Notes; see
   [Reviewing issues](reviewing.md#reply-in-notes)
+- the wand button describes changes in your own words for Claude to propose; see
+  [Describing changes](creating-and-editing.md#describing-changes-in-your-own-words)
 
 With one issue selected, the panel's toolbar also has **Edit**, a **Status** menu (Open, In
 Progress, Blocked, Deferred, Closed), **Copy** (the issue as Markdown) and **Refresh**.

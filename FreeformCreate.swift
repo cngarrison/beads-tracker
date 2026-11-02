@@ -69,7 +69,7 @@ enum FreeformCreate {
     }
 
     /// One line per candidate: id, status, type, priority, parent, title and the start of the description.
-    private static func candidateLine(_ i: BeadsIssue) -> String {
+    static func candidateLine(_ i: BeadsIssue) -> String {
         let snippet = (i.description ?? "")
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespaces)

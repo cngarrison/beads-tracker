@@ -119,6 +119,7 @@ CreateIssueView.swift      ── CreateIssueView, IssueFormContent, shared form
 IssueListView.swift        ── Issue list, detail card, Markdown rendering, detail/edit sheets
 ReviewTools.swift          ── Detail-panel review: Needs you rules, Claude Haiku extraction, replies to Notes
 FreeformCreate.swift       ── Describe mode: Claude proposes a new issue's fields from plain words
+FreeformUpdate.swift       ── Describe changes: Claude proposes single changes to an issue; the app runs them
 BTLog.swift                ── File-based diagnostic logger
 
 Info.plist                 ── App bundle metadata, including the version (set by the release script)
