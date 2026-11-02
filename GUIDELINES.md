@@ -23,7 +23,8 @@ subcommands into the Swift wrapper, and keeping build/release tooling working.
 - Swift/SwiftUI source changes (`*.swift` files) implementing UI and `bd` CLI integration
 - Build tooling (`Makefile`, icon generation, entitlements, Info.plist)
 - GitHub Actions release workflow and release scripts
-- Documentation (README.md, ROADMAP.md, CONTRIBUTING.md, BEADS.md)
+- Documentation (README.md, docs/ user guide, dev-docs/ developer notes, ROADMAP.md, CONTRIBUTING.md,
+  BEADS.md)
 - Issue tracking of project work via `bd` itself (this project is meta: it tracks its own
   development using the same `bd` tool it provides a UI for)
 
@@ -98,9 +99,10 @@ Key resources:
   workflow), `scripts/` (release-version.sh, release-notes.sh: GitHub release notes built from
   the commit messages since the previous tag, so commits should use `feat:`/`fix:`/`perf:`/`ci:`/
   `docs:` prefixes and describe the change for a release-notes reader)
-- **Docs:** `README.md`, `ROADMAP.md`, `CONTRIBUTING.md`, `BEADS.md`, `NEW_PROJECT_SETUP.md` (BB
-  guidelines template, not app-specific), this `GUIDELINES.md`
-- **Assets:** `BeadsTracker.svg`/`.icns`/`.png`, README images in `docs/images/`
+- **Docs:** `README.md` (overview, install, links), `docs/` (user guide: how to use the app; keep it
+  in step with user-visible changes), `dev-docs/` (developer notes), `ROADMAP.md`, `CONTRIBUTING.md`, `BEADS.md`,
+  `NEW_PROJECT_SETUP.md` (BB guidelines template, not app-specific), this `GUIDELINES.md`
+- **Assets:** `BeadsTracker.svg`/`.icns`/`.png`, README and user-guide images in `docs/images/`
   (`beads-tracker-create.png`, `beads-tracker-issues.webp`, `beads-tracker-issue-review.png`,
   `beadstracker-review.png`)
 - **Issue tracker data:** `.beads/` directory (Dolt-backed beads database for this project's own

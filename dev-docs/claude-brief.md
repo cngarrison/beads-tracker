@@ -1,6 +1,6 @@
 # How the Claude brief works
 
-*Developer notes. For using Needs you and the brief, see the README's "Reviewing issues" section.*
+*Developer notes. For using Needs you and the brief, see [Reviewing issues](../docs/reviewing.md) in the user guide.*
 
 When **Needs you** is set to Claude (gear on the review bar → *Find questions and decisions
 with: Claude*), BeadsTracker asks Claude to turn one issue into a short, plain-language

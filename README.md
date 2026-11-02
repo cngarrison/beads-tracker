@@ -40,31 +40,30 @@ A native macOS app for creating, browsing and managing issues in the [beads](htt
 
 ---
 
-## Requirements
+## Install
 
-- macOS 13.0 (Ventura) or later
-- Xcode Command Line Tools (`xcode-select --install`)
-- [`bd`](https://steveyegge.github.io/beads/getting-started/installation) installed and available in your `PATH` (see [PATH note](#bd-not-found) below)
-- A beads-initialised repository (one with a `.beads/` directory)
+Download the latest signed and notarized `.dmg` from [GitHub Releases](https://github.com/cngarrison/beads-tracker/releases), open it and drag **Beads Tracker** into **Applications**.
 
-For the icon pipeline only:
+You need macOS 13 (Ventura) or later, [`bd`](https://steveyegge.github.io/beads/getting-started/installation) installed, and a repository that uses beads (one with a `.beads/` directory). If the app can't find `bd`, see [`bd` not found](docs/troubleshooting.md#bd-not-found).
 
-```bash
-brew install librsvg   # provides rsvg-convert
-```
+## Documentation
+
+The [user guide](docs/README.md) covers:
+
+- [Getting started](docs/getting-started.md): opening a repository, windows and live updates
+- [Browsing and filtering](docs/browsing.md): the issue list, search and the detail panel
+- [Creating and editing issues](docs/creating-and-editing.md)
+- [Reviewing issues](docs/reviewing.md): Find in details, Needs you, the Claude brief and replies in Notes
+- [Troubleshooting](docs/troubleshooting.md): `bd` not found, live updates and the log file
 
 ---
 
-## Install
+## Build from source
 
-The easiest way to run Beads Tracker is to download the latest signed and notarized disk image from [GitHub Releases](https://github.com/cngarrison/beads-tracker/releases) — built automatically by a GitHub Actions release workflow. Download the `.dmg`, mount it, drag **Beads Tracker** into **Applications**, and launch it; macOS Gatekeeper will not show an unidentified-developer warning since the app is signed and notarized.
-
-Prefer to build it yourself? See [Build & run](#build--run) below.
-
-## Build & run
+You need the Xcode Command Line Tools (`xcode-select --install`).
 
 ```bash
-# Clone or download this repo, then:
+git clone https://github.com/cngarrison/beads-tracker.git
 cd beads-tracker
 
 make          # compiles the .swift files → BeadsTracker.app
@@ -72,208 +71,13 @@ make run      # compiles + opens the app
 make clean    # removes BeadsTracker.app
 ```
 
-The `Makefile` auto-detects your CPU architecture (`arm64` on Apple Silicon, `x86_64` on Intel) so no configuration is needed.
+The `Makefile` builds for your Mac's architecture (Apple Silicon or Intel). There is no Xcode project and there are no third-party dependencies: `swiftc` compiles the source files straight into an `.app` bundle, which keeps the project small enough for a new contributor, or an AI coding agent, to read in one pass.
 
-### Building the icon (optional)
+To rebuild the icon from `BeadsTracker.svg`, install `librsvg` (`brew install librsvg`) and run `make icon`, then `make`.
 
-```bash
-make icon     # SVG → .icns  (requires librsvg)
-make          # rebuilds the app and bundles the icon
-```
+## Contributing
 
-If the Dock doesn't pick up the new icon immediately:
-
-```bash
-killall Dock
-```
-
----
-
-## Usage
-
-### Selecting a repository
-
-Click **Choose…** in the top bar and navigate to any directory that contains a `.beads/` folder. The selection persists between launches.
-
-### Creating an issue
-
-![Create tab](docs/images/beads-tracker-create.png)
-
-Click **Create** in the top bar. Fill in at minimum the **Title** field (marked `*`), then press **Create Issue** or hit `⌘↵`.
-
-On success, a green banner shows the new issue ID (e.g. `bd-abc`), with **Copy ID** to put it on the clipboard.
-
-Field reference:
-
-| Field | `bd create` flag | Notes |
-|---|---|---|
-| Title | `--title` | Required |
-| Description | `--description` | Multi-line |
-| Type | `--type` | task / bug / feature / epic / chore |
-| Priority | `--priority` | P0 (critical) → P4 (backlog), default P2 |
-| Assignee | `--assignee` | Username or email |
-| Labels | `--labels` | Comma-separated |
-| External Reference | `--external-ref` | e.g. `gh-123` |
-| Dependencies | `--deps` | e.g. `blocks:bd-15` |
-| Design Notes | `--design` | Multi-line |
-| Acceptance Criteria | `--acceptance` | Multi-line |
-
-### Browsing issues
-
-![Issues tab](docs/images/beads-tracker-issues.webp)
-
-The list loads when you choose a repository and then updates live as issues change (the **Live** indicator), re-reading from `bd` every few minutes. Click **Refresh** (↺, `⌘R`) to re-read now.
-
-- **Filter** by status, priority and type, and **sort** by priority, last modified or created date. Epics expand to show their children, which are sorted the same way.
-- **Search** (`⌘F`) by title, description, notes, all three (**All Content**) or ID. An ID search takes several IDs separated by spaces or commas, and shows matching issues whatever their status, priority or type (those menus dim while they are ignored); the other scopes keep the filters.
-- **Select** issues (click, ⌘-click, Shift-click or drag) to see them in the detail panel. The pencil button on a card, or a double-click on a row, edits that issue. With one issue selected, the panel's toolbar also has a status menu and copy actions.
-- **Right-click** a row to claim or close it, view its full detail, or copy its ID, title or details as Markdown.
-
-Live updates use `bd`'s events journal, which the app turns on for each repository it opens (`bd config set events-journal true`).
-
-### Reviewing issues
-
-The bar above the detail cards helps you get through long, dense issues.
-
-![The review assistant turns an agent's dense notes into the decision waiting on you](docs/images/beadstracker-review.png)
-
-- **Find in details** (`⌥⌘F`) highlights a word in every section and comment of the issues shown, and counts the matches. (`⌘F` stays the list's search.)
-- **Needs you** adds a box to the top of each card listing the questions and decisions waiting on you, and highlights where they appear in the text. Click it to turn it on for the issues shown; choose **Always Show** from its menu to turn it on for every issue (remembered across relaunches).
-- **Reply** to an item, or use the note button beside the pencil on a card, to add a line to the issue's Notes (`bd update --append-notes`), signed with your initials and dated:
-
-  ```
-  CNG 2026-11-01 (re: (3) "Which option should we take?"): Option B. Keep it simple for now.
-  ```
-
-  When the question is numbered or lettered in the issue (`(3)`, `2.`, `b)`, `Q4`), the reply keeps that label, so the agents can tell which question it answers. Items that already have a reply like this are marked ✓.
-
-The gear on the bar holds the review settings:
-
-- **Sign replies as**: your initials (by default, the initials of your macOS account name).
-- **Find questions and decisions with**: the **built-in rules** (no network; they look for question sentences and phrases such as "decide whether", "decision needed" or "for CNG") or **Claude**.
-- **Anthropic API key**: needed for Claude, and kept in your Keychain. Using Claude sends the issue's content to the Anthropic API.
-- **Model**: defaults to Claude Haiku (`claude-haiku-5-5`); the menu lists the models your key can use, so a newer model needs no app update.
-- **Effort**: how much Claude thinks before writing (`low` by default). Lower is faster and cheaper; higher may judge tangled issues better.
-- **Output limit**: the most Claude may write for one brief, its thinking included (32K tokens by default, up to 128K). A brief on an issue with many decisions can need more; if one is cut off, raise the limit or lower the effort. You pay only for what is written.
-
-With Claude, the box becomes a **Brief**:
-
-- A short summary of what the issue is about and where it stands, with the key points.
-- Each item waiting on you as a plain question with its background and the options to choose from, the recommended one marked. **Show source** shows the original text.
-- Pick options and add comments on as many items as you like, then **Record answers in Notes** to add them all in one update. The brief is then remade from the new Notes, so answered items drop out.
-- A brief is made once per issue. If the issue changes some other way, the brief says it is out of date; ↺ or **Refresh** makes a new one.
-- Items Claude considers already answered are listed under **Answered**, with the line it took as your answer, so you can see why something isn't waiting on you.
-- **Request & response** shows the brief's saved request and Claude's raw answer (a JSON file in `~/Library/Logs/BeadsTracker/briefs/`), for checking a surprising brief.
-- A stopwatch line under the brief shows how long it took and where the time went (hover for connecting, waiting for Claude, the app, and tokens). Each brief is also logged under `[brief]` in `~/Library/Logs/BeadsTracker/beads-tracker.log`.
-
----
-
-## `bd` not found
-
-macOS GUI apps launched from the Dock or Finder do not inherit the user's shell `PATH`, so `bd` may not be found even if it works fine in Terminal. The fix is a one-time setup step that tells the OS where Homebrew's binaries live:
-
-```bash
-echo $(brew --prefix)/bin | sudo tee /etc/paths.d/homebrew
-```
-
-Then restart Beads Tracker. If `bd` is still not found, the app will display the exact command to run with the path that applies to your machine (Intel or Apple Silicon).
-
----
-
-## Project structure
-
-```
-beads-tracker/
-├── ContentView.swift        # App entry point (@main), window, top bar, project picker
-├── Models.swift             # Data models, date helpers, draft manager, app delegate
-├── BeadsRunner.swift        # CLI subprocess layer (bd commands)
-├── BeadsEventsWatcher.swift # `bd events tail` subprocess for live updates
-├── WorkspaceStore.swift     # Shared in-memory copy of a workspace's issues
-├── CreateIssueView.swift    # Create sheet UI
-├── IssueListView.swift      # Issue list, detail panel, edit sheet
-├── ReviewTools.swift        # Detail panel review: Needs you items, replies to Notes, Claude Haiku
-├── BTLog.swift              # Diagnostic log file
-├── Info.plist               # App bundle metadata
-├── Makefile                 # Build + icon pipeline
-├── BeadsTracker.svg         # App icon source
-├── docs/images/             # Screenshots and images used in this README
-└── README.md
-
-See CONTRIBUTING.md for the full layout, including the release workflow and scripts.
-```
-
-There is no Xcode project, no Swift Package Manager manifest, no third-party dependencies. `swiftc` compiles all source files directly into an `.app` bundle — the entire build is a single `swiftc` invocation in the `Makefile`. This minimal footprint is a deliberate design goal, not an oversight: keeping the codebase small and dependency-free means an AI coding agent (or a new human contributor) can read the whole project in one pass and ship a change without first onboarding onto a large build system.
-
----
-
-## How this was built
-
-### Background
-
-`beads` (`bd`) is a local-first, git-backed issue tracker that stores everything in a Dolt database inside your repository. It's fast and powerful, but entirely CLI-driven. The idea for Beads Tracker was simple: make it easier to file issues without leaving a GUI context — the same way GitHub Issues or Linear let you create tickets without touching a terminal.
-
-### The experiment
-
-This app was built as a deliberate experiment: *how quickly can a non-Swift developer produce a working, native macOS app with AI assistance?*
-
-The answer: **just over 30 minutes**, using [Beyond Better](https://BeyondBetter.app) — an AI-powered project assistant — with Claude Sonnet as the underlying model.
-
-### The conversation
-
-The session began with a single prompt explaining the goal and sharing:
-
-- The output of `bd create-form` (the interactive TUI for creating issues)
-- The full `bd create --help` reference
-- A preference for a compiled `.app` bundle via a `Makefile` rather than a full Xcode project
-- The desired field scope (matching `bd create-form`), a folder picker for repo selection, and a success banner with a Copy ID button
-
-Claude asked five clarifying questions — delivery format, PATH assumptions, field scope, working directory persistence, and post-submission behaviour — and then produced all three files (`BeadsTracker.swift`, `Info.plist`, `Makefile`) in a single pass.
-
-### Errors encountered
-
-**Compile error #1 — the only error on first build:**
-
-```
-BeadsTracker.swift:315: error: 'monospaced' is only available in macOS 13.3 or newer
-```
-
-The fix was a one-liner: replace `.monospaced()` (added in 13.3) with `.font(.system(.body, design: .monospaced))` (available since macOS 12). One search-replace, recompile, done.
-
-**Runtime issue — Issues tab showed "No Issues":**
-
-This took two iterations to resolve:
-
-1. **Wrong string literal type.** The regex pattern was written inside a Swift *raw string literal* (`#"..."#`). Raw strings don't process `\u{XXXX}` Unicode escape sequences, so the character class `[\u{25CB}...]` was matching literal backslash-u text rather than ○●◐✓❄. Switching to a regular string literal fixed the escape processing.
-
-2. **Wrong output format.** Even with the escape fixed, nothing matched. Running `bd list --flat | cat -v` revealed the actual output format:
-   ```
-   ○ bt-e4l [● P2] [task] - Add icon for the app
-   ```
-   The original regex assumed `○ id ● P2 title` (no brackets, no type field). The real format has `[● P2] [task] -` between the ID and the title. A regex rewrite against the real format fixed it immediately.
-
-Both issues were diagnosed and patched within minutes of being reported.
-
-### Why this matters
-
-The entire app — including the icon SVG, the `Makefile`, the full SwiftUI form, the `bd list` parser, and this README — was produced collaboratively in a single conversation. The developer involved has no Swift experience. Beyond Better handled the context, tracked the files, and applied patches directly to the repository; Claude provided the Swift knowledge and iterative debugging.
-
-For teams using `beads` for issue tracking, this pattern — *describe what you want, iterate on errors, ship* — means a custom native UI is now within reach without dedicated front-end engineering.
-
----
-
-## What's next
-
-Some features on the roadmap (tracked in this repo's beads database):
-
-- **Custom types** — read the project's beads config to offer project-specific issue types
-- **Label filter**, and **grouping** the list by type, status or label
-- **Create child issues** from the detail view
-- **Dependency graph** — a visual view of what blocks what
-- **Menu bar extra** for quick issue creation, and **Open in Terminal** for the selected repository
-
-Contributions welcome — or just describe what you want to [Beyond Better](https://BeyondBetter.app) and send a PR.
-
----
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the project layout, conventions and release process, [ROADMAP.md](ROADMAP.md) for what's planned, and [dev-docs/](dev-docs/) for developer notes. You don't need to know Swift: the app was first written in about 30 minutes by a non-Swift developer working with Claude, as described in [How Beads Tracker was built](dev-docs/how-it-was-built.md).
 
 ## License
 
