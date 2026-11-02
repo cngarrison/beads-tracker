@@ -866,6 +866,14 @@ enum AnthropicKeychain {
 
 // MARK: - Views
 
+/// A TextEditor's typing undo goes on the window's undo stack and stays there when the editor
+/// is removed (a reply sent, a sheet closed). ⌘Z in another field, such as the list filter,
+/// falls through to that stack once its own edits run out and messages the freed text view,
+/// crashing the app (bt-djz). Every TextEditor wrapper calls this when it disappears.
+func clearStaleUndo(_ undoManager: UndoManager?) {
+    undoManager?.removeAllActions()
+}
+
 /// A multi-line text editor that grows with its text (Return adds a line), up to `maxHeight`,
 /// then scrolls. A hidden copy of the text sets the height; the editor is laid over it.
 struct GrowingTextEditor: View {
@@ -873,6 +881,7 @@ struct GrowingTextEditor: View {
     var placeholder: String = ""
     var minHeight: CGFloat = 36
     var maxHeight: CGFloat = 240
+    @Environment(\.undoManager) private var undoManager
 
     var body: some View {
         Text(text + "\n ")
@@ -885,6 +894,7 @@ struct GrowingTextEditor: View {
                 TextEditor(text: $text)
                     .font(.body)
                     .scrollContentBackground(.hidden)
+                    .onDisappear { clearStaleUndo(undoManager) }
             }
             .overlay(alignment: .topLeading) {
                 if text.isEmpty {
