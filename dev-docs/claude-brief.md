@@ -33,7 +33,8 @@ request, and what can go wrong. The code is in `ReviewTools.swift` (`AnthropicRe
    the items you answered should drop out.
 
 Briefs are kept in memory per issue for the life of the app; nothing is written to disk except
-the log line described under [Timing and logs](#timing-and-logs).
+the log line and the saved request/response described under
+[Saved requests and responses](#saved-requests-and-responses) and [Timing and logs](#timing-and-logs).
 
 ---
 
@@ -112,17 +113,19 @@ to a decision.
 
 summary: two to four sentences on what the issue is about and where it stands now.
 
-points: up to five short bullets with the facts that matter most (what was done, what is
-left, risks). Leave it empty when the summary already covers them.
+points: up to five short bullets with the facts that matter most (what was done, what is left,
+risks). Leave it empty when the summary already covers them.
 
-items: everything that waits on <who>: questions to answer, decisions or choices, approvals
-or sign-offs, and requests for direction. Include findings or follow-ups that need <who> to
-decide what happens next even when they are not phrased as questions. Not items: work the
-agents will do themselves, rhetorical questions, and anything <who> has already answered.
-<who>'s answers appear as lines starting "<who> YYYY-MM-DD", "<who> decision" or
-"From <who>", often with (re: "...") naming the question; an item answered there is settled,
-even when the text around it still mentions it. Keep the items in document order, and return
-none when nothing waits on <who>.
+items: every question, decision or choice, approval or sign-off, and request for direction the
+issue puts to <who>, whether or not <who> has answered it yet. Include findings or follow-ups
+that need <who> to decide what happens next even when they are not phrased as questions. Not
+items: work the agents will do themselves, and rhetorical questions. Keep the items in
+document order; return none only when the issue puts nothing to <who> at all.
+
+<who>'s answers appear as lines starting "<who> YYYY-MM-DD", "<who> decision" or "From <who>",
+often with (re: "...") naming the question they answer. Mark an item answered only when such a
+line clearly answers that specific item; answering a related or earlier question does not
+count. When in doubt, it is open.
 
 For each item:
 - title: the question as one plain sentence ending in "?".
@@ -134,6 +137,8 @@ For each item:
 - quote: a short excerpt copied exactly from the text (one sentence or clause) where the item
   is raised.
 - section: the section that quote is in.
+- status: "answered" when one of <who>'s lines answers it, otherwise "open".
+- answered_by: for an answered item, that line of <who>'s, copied exactly; "" when open.
 - label: the item's own number or letter where the text raises it, copied exactly ("(3)",
   "2.", "b)", "Q4"), so <who>'s answer can name it; "" when it has none. When one numbered
   line or paragraph holds several questions, give each its own number.
@@ -182,9 +187,12 @@ guarantees Claude's answer is valid JSON that matches it: every field present, n
           "quote":       { "type": "string" },
           "section":     { "type": "string",
                            "enum": ["Description", "Design", "Acceptance Criteria", "Notes", "Comments"] },
-          "label":       { "type": "string" }
+          "label":       { "type": "string" },
+          "status":      { "type": "string", "enum": ["open", "answered"] },
+          "answered_by": { "type": "string" }
         },
-        "required": ["kind", "title", "context", "options", "recommended", "quote", "section", "label"],
+        "required": ["kind", "title", "context", "options", "recommended", "quote", "section", "label",
+                     "status", "answered_by"],
         "additionalProperties": false
       }
     }
@@ -215,7 +223,24 @@ guarantees Claude's answer is valid JSON that matches it: every field present, n
       "recommended": "Debounce writes",
       "quote": "either debounce writes or persist only on quit (data loss risk on crash)",
       "section": "Notes",
-      "label": "(1)"
+      "label": "(1)",
+      "status": "open",
+      "answered_by": ""
+    },
+    {
+      "kind": "question",
+      "title": "Should the cache be shared between windows?",
+      "context": "Two windows on the same repository could share one cache or keep their own.",
+      "options": [
+        { "label": "Share it", "detail": "Less memory; both windows see the same data." },
+        { "label": "One per window", "detail": "Simpler, but uses more memory." }
+      ],
+      "recommended": "Share it",
+      "quote": "(2) share the cache across windows on the same repo?",
+      "section": "Description",
+      "label": "(2)",
+      "status": "answered",
+      "answered_by": "CNG 2026-11-01 (re: (2) \"Should the cache be shared…\"): Share it."
     }
   ]
 }
@@ -234,6 +259,7 @@ guarantees Claude's answer is valid JSON that matches it: every field present, n
 | `quote` | Highlights where the item is raised in the issue text (orange bar), and **Show source**. Matching ignores case, `*`, `_`, backticks and extra spaces. |
 | `section` | Which section's text to highlight, and the label under **Show source**. |
 | `label` | Shown before the question, and kept in your reply: `(re: (1) "When should…?")`. If Claude leaves it empty but the quote starts with a label, the app takes it from there. |
+| `status`, `answered_by` | Open items are shown to answer. Answered items go in a collapsed **Answered (n)** list with the line Claude took as the answer, and aren't highlighted in the text. |
 
 Your answer is recorded as:
 
@@ -241,9 +267,12 @@ Your answer is recorded as:
 CNG 2026-11-02 (re: (1) "When should the cache be saved to disk?"): Debounce writes. Keep the second of risk.
 ```
 
-An item counts as answered (✓) when the Notes contain a reply whose `(re: ...)` starts with
-the same label and opening words of the question. Claude is also told to leave out anything
-already answered, so a refreshed brief normally drops those items.
+An item counts as answered when Claude marks it `"status": "answered"`, or when the Notes
+contain a reply whose `(re: ...)` starts with the same label and opening words of the question.
+Answered items are not dropped: Claude returns every item it finds, so a brief that says
+nothing is waiting also shows what it considered settled, and by which line. That makes a
+wrong "everything is answered" judgement visible, and the prompt asks Claude to count an
+item as answered only when a line clearly answers that specific item.
 
 ---
 
@@ -279,6 +308,27 @@ exact token counts for that brief.
 Speed is mostly output: Haiku writes roughly 150–250 tokens a second, so the time to a brief is
 close to *output tokens ÷ that rate*. Lower effort (less thinking) and fewer items are what make
 it faster.
+
+---
+
+## Saved requests and responses
+
+Every brief, and every failed one, is saved as a JSON file in
+`~/Library/Logs/BeadsTracker/briefs/`, named `<yyyyMMdd-HHmmss>-<issue id>.json`; the newest
+200 are kept. **Request & response**, next to the stopwatch line (or under an error), shows
+the file in the Finder. Each file holds:
+
+| Key | Contents |
+|---|---|
+| `issue_id`, `saved_at` | Which issue, and when. |
+| `timing` | The same figures as the `[brief]` log line (model, effort, limit, times, tokens, request ID). |
+| `request` | The exact request body sent: model, `max_tokens`, system prompt, `output_config` with the schema, and the user message with the issue text. |
+| `response` | The API's raw response (content blocks, `stop_reason`, `usage`), plus `brief`: Claude's answer parsed out of its text block, for reading. For an API error, the error body. |
+| `error` | The message shown in the app, when the brief failed. |
+
+Comparing two files for the same issue is the quickest way to see why one run listed questions
+and another didn't: check whether the issue text in `request` differs, and which items
+`response.brief.items` marked `answered`, with which `answered_by` line.
 
 ---
 
