@@ -25,9 +25,18 @@ struct ReviewItem: Identifiable, Hashable {
     var context: String? = nil
     var options: [ReviewOption] = []
     var recommended: String? = nil   // label of the option the text recommends
+    /// The item's own number or letter in the issue, e.g. "(3)", "2.", "b)" or "Q4".
+    var label: String? = nil
     var id: String { section + "\u{1F}" + quote }
     /// What a reply's "(re: ...)" names: the plain question when there is one.
     var replyRef: String { title ?? quote }
+
+    /// The question as shown on the card, led by its label when the text doesn't already start with it.
+    var displayText: String {
+        let text = title ?? plainQuote(quote)
+        guard let label, !text.hasPrefix(label) else { return text }
+        return "\(label) \(text)"
+    }
 }
 
 struct ReviewOption: Hashable {
@@ -166,27 +175,50 @@ func quoteSnippet(_ quote: String) -> String {
     return cut + "\u{2026}"
 }
 
-/// The Notes line for a reply: "CNG 2026-11-01 (re: "Which option…"): answer".
-/// `ref` is the question or quote replied to; nil for a free note.
-func formatReply(_ answer: String, ref: String?, initials: String, date: Date = Date()) -> String {
+/// The Notes line for a reply: "CNG 2026-11-01 (re: (3) "Which option…"): answer".
+/// `ref` is the question or quote replied to (nil for a free note); `label` is the item's own
+/// number or letter, kept so the reply can be matched to the question it answers.
+func formatReply(_ answer: String, ref: String?, label: String? = nil, initials: String, date: Date = Date()) -> String {
     let head = "\(initials) \(replyDateStamp(date))"
     let body = answer.trimmingCharacters(in: .whitespacesAndNewlines)
-    if let ref { return "\(head) (re: \"\(quoteSnippet(ref))\"): \(body)" }
-    return "\(head): \(body)"
+    guard let ref else { return "\(head): \(body)" }
+    return "\(head) (re: \(replyReference(ref, label: label))): \(body)"
+}
+
+/// `(3) "Which option…"`, or just the quoted snippet when there is no label.
+func replyReference(_ ref: String, label: String?) -> String {
+    guard let label, !label.isEmpty else { return "\"\(quoteSnippet(ref))\"" }
+    var text = plainQuote(ref)
+    if text.hasPrefix(label) { text = String(text.dropFirst(label.count)).trimmingCharacters(in: .whitespaces) }
+    return "\(label) \"\(quoteSnippet(text))\""
 }
 
 /// True when the notes already hold a reply that references this item.
 func isAnswered(_ item: ReviewItem, notes: String?) -> Bool {
     guard let notes, !notes.isEmpty else { return false }
-    var key = quoteSnippet(item.replyRef)
-    if key.hasSuffix("\u{2026}") { key.removeLast() }
-    return notes.contains("(re: \"\(key)")
+    var key = replyReference(item.replyRef, label: item.label)
+    if key.hasSuffix("\u{2026}\"") { key.removeLast(2) }
+    if notes.contains("(re: \(key)") { return true }
+    // Replies recorded before labels were kept: (re: "snippet…")
+    var plain = quoteSnippet(item.replyRef)
+    if plain.hasSuffix("\u{2026}") { plain.removeLast() }
+    return notes.contains("(re: \"\(plain)")
 }
 
 // MARK: - Built-in rules
 
 private let fencePattern = "^\\s*```"
 private let listMarkerPattern = #"^\s*(?:[-*+>]\s+|\d+[.)]\s+|#{1,6}\s+)"#
+/// A numbered or lettered marker at the start of an item: "(3)", "3.", "3)", "(b)", "b)", "B.", "Q4", "Q4:".
+private let itemLabelPattern = try! NSRegularExpression(
+    pattern: #"^\s*(?:[-*+>]\s+)?(\(\d{1,3}\)|\d{1,3}[.)]|\([A-Za-z]\)|[A-Za-z][.)]|Q\d{1,3}[.:)]?)\s+"#)
+
+/// The item's own number or letter, from the start of the text, if it has one.
+func itemLabel(_ text: String) -> String? {
+    let ns = text as NSString
+    guard let m = itemLabelPattern.firstMatch(in: text, range: NSRange(location: 0, length: ns.length)) else { return nil }
+    return ns.substring(with: m.range(at: 1))
+}
 private let sentenceSplit = try! NSRegularExpression(pattern: #"(?<=[.?!])\s+(?=\S)"#)
 
 private func decisionPatterns(_ who: String) -> [NSRegularExpression] {
@@ -238,10 +270,10 @@ func heuristicReviewItems(_ d: BeadsIssueDetail, initials: String) -> [ReviewIte
     var items: [ReviewItem] = []
     var seen = Set<String>()
 
-    func add(_ section: String, _ kind: ReviewItemKind, _ quote: String) {
+    func add(_ section: String, _ kind: ReviewItemKind, _ quote: String, label: String?) {
         let q = quote.trimmingCharacters(in: .whitespaces)
         guard q.count >= 8, seen.insert(section + q).inserted else { return }
-        items.append(ReviewItem(section: section, kind: kind, quote: q))
+        items.append(ReviewItem(section: section, kind: kind, quote: q, label: itemLabel(q) ?? label))
     }
 
     for (section, text) in reviewSections(d) {
@@ -262,6 +294,7 @@ func heuristicReviewItems(_ d: BeadsIssueDetail, initials: String) -> [ReviewIte
                 inLeadIn = false
                 continue
             }
+            let lineLabel = itemLabel(rawLine)
             let probe = codeAndURLsRemoved(line)
             if matchesAny(decisions, probe) {
                 // A bare lead-in ("Open questions:") is not an item itself; its list items are.
@@ -269,18 +302,18 @@ func heuristicReviewItems(_ d: BeadsIssueDetail, initials: String) -> [ReviewIte
                 if !inLeadIn {
                     // Quote just the sentences that ask, unless the ask spans sentences.
                     let asking = sentences(of: line).filter { matchesAny(decisions, codeAndURLsRemoved($0)) }
-                    add(section, .decision, asking.isEmpty ? line : asking.joined(separator: " "))
+                    add(section, .decision, asking.isEmpty ? line : asking.joined(separator: " "), label: lineLabel)
                 }
                 continue
             }
             if inLeadIn && isListItem {
-                add(section, probe.contains("?") ? .question : .decision, line)
+                add(section, probe.contains("?") ? .question : .decision, line, label: lineLabel)
                 continue
             }
             inLeadIn = false
             guard probe.contains("?") else { continue }
             let questions = sentences(of: line).filter { codeAndURLsRemoved($0).contains("?") }
-            if !questions.isEmpty { add(section, .question, questions.joined(separator: " ")) }
+            if !questions.isEmpty { add(section, .question, questions.joined(separator: " "), label: lineLabel) }
         }
     }
     return items
@@ -381,6 +414,9 @@ enum AnthropicReview {
         - quote: a short excerpt copied exactly from the text (one sentence or clause) where \
         the item is raised.
         - section: the section that quote is in.
+        - label: the item's own number or letter where the text raises it, copied exactly \
+        ("(3)", "2.", "b)", "Q4"), so \(who)'s answer can name it; "" when it has none. When \
+        one numbered line or paragraph holds several questions, give each its own number.
         """
     }
 
@@ -410,8 +446,9 @@ enum AnthropicReview {
                 "recommended": ["type": "string"],
                 "quote":       ["type": "string"],
                 "section":     ["type": "string", "enum": reviewSectionNames],
+                "label":       ["type": "string"],
             ],
-            "required": ["kind", "title", "context", "options", "recommended", "quote", "section"],
+            "required": ["kind", "title", "context", "options", "recommended", "quote", "section", "label"],
             "additionalProperties": false,
         ]
         let schema: [String: Any] = [
@@ -490,12 +527,14 @@ enum AnthropicReview {
                 return label.isEmpty ? nil : ReviewOption(label: label, detail: str(o["detail"]))
             }
             let recommended = str(item["recommended"])
+            let label = str(item["label"])
             return ReviewItem(section: str(item["section"]), kind: kind,
                               quote: quote.isEmpty ? title : quote,
                               title: title.isEmpty ? nil : title,
                               context: str(item["context"]),
                               options: options,
-                              recommended: options.contains { $0.label == recommended } ? recommended : nil)
+                              recommended: options.contains { $0.label == recommended } ? recommended : nil,
+                              label: label.isEmpty ? itemLabel(quote) : label)
         }
         let points = (parsed["points"] as? [String] ?? []).map { str($0) }.filter { !$0.isEmpty }
         timing.parse = Date().timeIntervalSince(received)
@@ -753,7 +792,7 @@ struct ReviewItemRow: View {
                 .foregroundStyle(answered ? Color.secondary : Color.orange)
                 .help(item.kind == .question ? "Question" : "Decision")
             VStack(alignment: .leading, spacing: 2) {
-                Text(plainQuote(item.quote))
+                Text(item.displayText)
                     .font(.callout)
                     .foregroundStyle(answered ? .secondary : .primary)
                     .lineLimit(6)
@@ -808,7 +847,7 @@ struct DecisionItemView: View {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Image(systemName: item.kind == .question ? "questionmark.circle" : "arrow.triangle.branch")
                     .foregroundStyle(answered ? Color.secondary : Color.orange)
-                Text(item.title ?? plainQuote(item.quote))
+                Text(item.displayText)
                     .font(.callout).fontWeight(.semibold)
                     .foregroundStyle(answered ? .secondary : .primary)
                     .fixedSize(horizontal: false, vertical: true)

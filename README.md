@@ -142,10 +142,10 @@ The bar above the detail cards helps you get through long, dense issues.
 - **Reply** to an item, or use the note button beside the pencil on a card, to add a line to the issue's Notes (`bd update --append-notes`), signed with your initials and dated:
 
   ```
-  CNG 2026-11-01 (re: "Which option should we take?"): Option B. Keep it simple for now.
+  CNG 2026-11-01 (re: (3) "Which option should we take?"): Option B. Keep it simple for now.
   ```
 
-  Items that already have a reply like this are marked ✓.
+  When the question is numbered or lettered in the issue (`(3)`, `2.`, `b)`, `Q4`), the reply keeps that label, so the agents can tell which question it answers. Items that already have a reply like this are marked ✓.
 
 The gear on the bar holds the review settings:
 

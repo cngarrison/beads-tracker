@@ -1417,8 +1417,8 @@ struct IssueDetailCard: View {
         items.filter { $0.section == section }.map(\.quote)
     }
 
-    private func appendReply(_ answer: String, ref: String?) async throws {
-        try await appendToNotes([formatReply(answer, ref: ref, initials: replyInitials(storedInitials))])
+    private func appendReply(_ answer: String, ref: String?, label: String? = nil) async throws {
+        try await appendToNotes([formatReply(answer, ref: ref, label: label, initials: replyInitials(storedInitials))])
     }
 
     /// Appends the lines to Notes in one `bd update`, so the issue changes (and its events
@@ -1444,7 +1444,7 @@ struct IssueDetailCard: View {
     private func recordAnswers(_ items: [ReviewItem]) {
         let drafted = draftedItems(items)
         let initials = replyInitials(storedInitials)
-        let lines = drafted.map { formatReply($0.1.text, ref: $0.0.replyRef, initials: initials) }
+        let lines = drafted.map { formatReply($0.1.text, ref: $0.0.replyRef, label: $0.0.label, initials: initials) }
         let issueID = detail.id
         isRecording = true
         recordError = nil
@@ -1774,8 +1774,8 @@ struct IssueDetailCard: View {
                                       isReplying: replyingTo == item.id || workingDirectory == nil,
                                       onReply: { replyingTo = item.id })
                         if replyingTo == item.id {
-                            NoteReplyEditor(prefix: "\(replyInitials(storedInitials)) \(replyDateStamp()) (re: \u{201C}\(quoteSnippet(item.replyRef))\u{201D}):",
-                                            onSubmit: { try await appendReply($0, ref: item.replyRef) },
+                            NoteReplyEditor(prefix: "\(replyInitials(storedInitials)) \(replyDateStamp()) (re: \(replyReference(item.replyRef, label: item.label))):",
+                                            onSubmit: { try await appendReply($0, ref: item.replyRef, label: item.label) },
                                             onCancel: { replyingTo = nil })
                                 .padding(.leading, 22)
                         }
