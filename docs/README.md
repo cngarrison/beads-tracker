@@ -20,5 +20,5 @@ and the developer notes in [dev-docs/](../dev-docs/).
 | `⌘R` | Re-read all issues |
 | `⌘F` | Search the list |
 | `⌥⌘F` | Find in the details of the issues shown |
-| `⌘↵` | Create the issue (create form), save (edit sheet), or record a reply |
+| `⌘↵` | Fill in the form from your description (Describe), create the issue (create form), save (edit sheet), or record a reply |
 | `Esc` | Cancel the create form, edit sheet or reply |

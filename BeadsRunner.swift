@@ -13,6 +13,7 @@ enum BeadsRunner {
         title: String, description: String, type: IssueType, priority: Priority,
         assignee: String, labels: String, externalRef: String,
         designNotes: String, acceptanceCriteria: String, dependencies: String,
+        notes: String = "", parent: String = "",
         workingDirectory: String
     ) throws -> String {
         var args = ["bd", "create"]
@@ -25,7 +26,12 @@ enum BeadsRunner {
         if !externalRef.isEmpty        { args += ["--external-ref", externalRef] }
         if !designNotes.isEmpty        { args += ["--design", designNotes] }
         if !acceptanceCriteria.isEmpty { args += ["--acceptance", acceptanceCriteria] }
-        if !dependencies.isEmpty       { args += ["--deps", dependencies] }
+        // "type:id" entries, comma separated; spaces after commas are trimmed, not passed to bd.
+        let deps = dependencies.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }.joined(separator: ",")
+        if !deps.isEmpty               { args += ["--deps", deps] }
+        if !notes.isEmpty              { args += ["--notes", notes] }
+        if !parent.isEmpty             { args += ["--parent", parent] }
 
         let (stdout, stderr, status) = try run(args, in: workingDirectory)
         if status != 0 {

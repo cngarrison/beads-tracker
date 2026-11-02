@@ -163,7 +163,8 @@ func formTextArea(
 /// Contains all input fields; does NOT include banners, ScrollView, or bottom bar.
 struct IssueFormContent: View {
     @Binding var fields: IssueFormFields
-    var showDependencies: Bool = true
+    var showDependencies: Bool = true   // Create only: Parent and Dependencies (set with the issue)
+    var showNotes: Bool = true          // the edit sheet shows Notes in its own section
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -201,9 +202,14 @@ struct IssueFormContent: View {
                     TextField("gh-123, jira-ABC-456", text: $fields.externalRef).textFieldStyle(.roundedBorder)
                 }
                 if showDependencies {
-                    formField("Dependencies") {
-                        TextField("discovered-from:bd-20, blocks:bd-15", text: $fields.dependencies).textFieldStyle(.roundedBorder)
+                    formField("Parent") {
+                        TextField("bd-a3f8 (epic or issue this belongs under)", text: $fields.parent).textFieldStyle(.roundedBorder)
                     }
+                }
+            }
+            if showDependencies {
+                formField("Dependencies") {
+                    TextField("discovered-from:bd-20, blocks:bd-15", text: $fields.dependencies).textFieldStyle(.roundedBorder)
                 }
             }
             formField("Design Notes") {
@@ -215,6 +221,11 @@ struct IssueFormContent: View {
                 formTextArea($fields.acceptanceCriteria,
                              placeholder: "List the criteria for completion\u{2026}",
                              height: 70)
+            }
+            if showNotes {
+                formField("Notes") {
+                    formTextArea($fields.notes, placeholder: "Add notes\u{2026}", height: 70)
+                }
             }
         }
     }
@@ -229,16 +240,39 @@ struct CreateIssueView: View {
 
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var draftManager = FormDraftManager.shared
+    @AppStorage("replyInitials") private var storedInitials: String = ""
 
+    /// Describe: a plain-words description that Claude turns into a filled-in form.
+    /// Form: the fields themselves (the only mode without an API key).
+    private enum Mode: String { case describe, form }
+
+    @State private var mode: Mode       = .form
+    @State private var hasKey           = AnthropicKeychain.load() != nil
     @State private var isSubmitting    = false
     @State private var createdIssueID: String? = nil
     @State private var errorMessage:   String? = nil
     @State private var showCopied      = false
     @State private var showDraftBanner = false
+    @State private var proposeTask: Task<Void, Never>? = nil
+    @State private var proposeStarted: Date? = nil
+    @State private var filledByClaude  = false
+    @State private var duplicates: [DuplicateCandidate] = []
+    @State private var droppedIDs: [String] = []
 
     private var canSubmit: Bool {
         !draftManager.fields.title.trimmingCharacters(in: .whitespaces).isEmpty
             && !workingDirectory.isEmpty && !isSubmitting
+    }
+
+    private var canPropose: Bool {
+        !draftManager.fields.freeformText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && proposeTask == nil && !isSubmitting
+    }
+
+    /// Describe when Claude is available, unless the form already has content (a resumed
+    /// draft, or fields left from last time).
+    private var startingMode: Mode {
+        hasKey && draftManager.fields.title.isEmpty ? .describe : .form
     }
 
     var body: some View {
@@ -246,6 +280,18 @@ struct CreateIssueView: View {
             // Sheet title bar
             HStack {
                 Text("New Issue").font(.headline)
+                Spacer()
+                if hasKey {
+                    Picker("", selection: $mode) {
+                        Text("Describe").tag(Mode.describe)
+                        Text("Form").tag(Mode.form)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                    .disabled(proposeTask != nil || isSubmitting)
+                    .help("Describe the issue in your own words for Claude to fill in the form, or fill in the form yourself")
+                }
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .buttonStyle(.bordered)
@@ -259,16 +305,70 @@ struct CreateIssueView: View {
             if let id  = createdIssueID { successBanner(issueID: id) }
             if showDraftBanner          { draftBanner }
             if let err = errorMessage   { errorBanner(message: err) }
-            ScrollView { IssueFormContent(fields: $draftManager.fields).padding() }
-            Divider()
-            bottomBar
+            if mode == .describe {
+                describePane
+                Divider()
+                describeBottomBar
+            } else {
+                if filledByClaude { filledBanner }
+                if !duplicates.isEmpty { duplicatesBanner }
+                ScrollView { IssueFormContent(fields: $draftManager.fields).padding() }
+                Divider()
+                bottomBar
+            }
         }
         .frame(width: max(520, preferredWidth), height: max(560, preferredHeight - 100))
         .onAppear {
+            mode = startingMode
             if draftManager.hasDraft() {
                 showDraftBanner = true
             }
         }
+        .onDisappear { proposeTask?.cancel() }
+    }
+
+    // MARK: Describe mode
+
+    private var describePane: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Describe the issue in your own words: what\u{2019}s wrong or wanted, how urgent it is, "
+                 + "and any issues it relates to or follows on from. Claude fills in the form for you "
+                 + "to check; nothing is created until you click Create.")
+                .font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            AutoResizingTextArea(text: $draftManager.fields.freeformText,
+                                 placeholder: "e.g. Quit hangs when an events tail is running. Pretty urgent; "
+                                     + "follow-up to the events watcher work.",
+                                 minHeight: 160, maxAutoHeight: 400)
+                .disabled(proposeTask != nil)
+            Text("Sends your description and a list of this project\u{2019}s issues (ids, titles, the "
+                 + "start of each description) to the Anthropic API, using the model in Review settings.")
+                .font(.caption).foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding()
+        .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    private var describeBottomBar: some View {
+        HStack {
+            Button("Clear") { clearForm() }.buttonStyle(.bordered).disabled(proposeTask != nil || isSubmitting)
+            Spacer()
+            if let started = proposeStarted, proposeTask != nil {
+                ProgressView().scaleEffect(0.75)
+                TimelineView(.periodic(from: started, by: 1)) { context in
+                    Text("Asking Claude\u{2026} \(Int(context.date.timeIntervalSince(started))) s")
+                        .foregroundStyle(.secondary).monospacedDigit()
+                }
+                Button("Stop") { proposeTask?.cancel() }.buttonStyle(.bordered)
+            }
+            Button("Fill In Form") { fillInForm() }
+                .buttonStyle(.borderedProminent)
+                .disabled(!canPropose)
+                .keyboardShortcut(.return, modifiers: .command)
+        }
+        .padding().background(.bar)
     }
 
     // MARK: Bottom bar
@@ -293,6 +393,53 @@ struct CreateIssueView: View {
 
     // MARK: Banners
 
+    private var filledBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "sparkles").foregroundStyle(.purple)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Claude filled in this form from your description. Check it, then Create.")
+                    .fontWeight(.medium)
+                if !droppedIDs.isEmpty {
+                    Text("Left out issue ids that weren\u{2019}t in the list sent to Claude: \(droppedIDs.joined(separator: ", "))")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            Button("Edit Description") { mode = .describe }
+                .buttonStyle(.bordered).controlSize(.small)
+        }
+        .padding(.horizontal).padding(.vertical, 8)
+        .background(Color.purple.opacity(0.08))
+    }
+
+    private var duplicatesBanner: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("This may already be covered by:", systemImage: "doc.on.doc")
+                .fontWeight(.medium).foregroundStyle(.orange)
+            ForEach(duplicates) { d in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        (Text(d.id).font(.system(.body, design: .monospaced))
+                         + Text(" (\(d.status.replacingOccurrences(of: "_", with: " "))) ").foregroundColor(.secondary)
+                         + Text(d.title))
+                        if !d.reason.isEmpty {
+                            Text(d.reason).font(.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    Spacer()
+                    let linked = dependencyIDs.contains(d.id)
+                    Button(linked ? "Linked" : "Link as Related") { addRelated(d.id) }
+                        .buttonStyle(.bordered).controlSize(.small)
+                        .disabled(linked)
+                        .help("Add related:\(d.id) to Dependencies")
+                }
+            }
+        }
+        .padding(.horizontal).padding(.vertical, 8)
+        .background(Color.orange.opacity(0.08))
+    }
+
     @ViewBuilder
     private var draftBanner: some View {
         HStack(spacing: 10) {
@@ -303,6 +450,7 @@ struct CreateIssueView: View {
                 draftManager.resumeDraft()
                 draftManager.clearDraft()
                 showDraftBanner = false
+                mode = startingMode
             }
             .buttonStyle(.borderedProminent).controlSize(.small)
             Button("Discard") {
@@ -352,9 +500,59 @@ struct CreateIssueView: View {
         draftManager.clearDraft()
         errorMessage = nil
         showDraftBanner = false
+        filledByClaude = false
+        duplicates = []
+        droppedIDs = []
     }
 
     private func clearForm() { clearFormFields(); createdIssueID = nil }
+
+    /// Ids already in the Dependencies field ("type:id" or bare id, comma separated).
+    private var dependencyIDs: Set<String> {
+        Set(draftManager.fields.dependencies.split(separator: ",").compactMap {
+            $0.split(separator: ":").last.map { $0.trimmingCharacters(in: .whitespaces) }
+        })
+    }
+
+    private func addRelated(_ id: String) {
+        let deps = draftManager.fields.dependencies.trimmingCharacters(in: .whitespaces)
+        draftManager.fields.dependencies = deps.isEmpty ? "related:\(id)" : deps + ", related:\(id)"
+    }
+
+    /// Asks Claude to turn the description into form fields, then shows the form to check.
+    private func fillInForm() {
+        let text = draftManager.fields.freeformText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        guard let apiKey = AnthropicKeychain.load() else {
+            hasKey = false; mode = .form
+            errorMessage = "Add an Anthropic API key in Review settings to describe issues in your own words."
+            return
+        }
+        let issues = WorkspaceStoreRegistry.shared.existing(workingDirectory)?.issues ?? []
+        let candidates = FreeformCreate.candidates(from: issues, text: text)
+        let current = draftManager.fields
+        let initials = replyInitials(storedInitials)
+        let model = AnthropicReview.model, effort = AnthropicReview.effort, maxTokens = AnthropicReview.maxTokens
+        errorMessage = nil
+        proposeStarted = Date()
+        proposeTask = Task { @MainActor in
+            defer { proposeTask = nil }
+            do {
+                let proposal = try await FreeformCreate.propose(
+                    text: text, current: current, candidates: candidates, initials: initials,
+                    model: model, effort: effort, maxTokens: maxTokens, apiKey: apiKey)
+                guard !Task.isCancelled else { return }
+                draftManager.fields = proposal.fields
+                duplicates = proposal.duplicates
+                droppedIDs = proposal.droppedIDs
+                filledByClaude = true
+                mode = .form
+            } catch {
+                guard !Task.isCancelled else { return }
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
 
     private func copyToClipboard(_ s: String) {
         NSPasteboard.general.clearContents()
@@ -380,11 +578,13 @@ struct CreateIssueView: View {
                     externalRef: snap.externalRef, designNotes: snap.designNotes,
                     acceptanceCriteria: snap.acceptanceCriteria,
                     dependencies: snap.dependencies,
+                    notes: snap.notes, parent: snap.parent.trimmingCharacters(in: .whitespaces),
                     workingDirectory: dir)
                 DispatchQueue.main.async {
                     isSubmitting = false
                     createdIssueID = id
                     clearFormFields()
+                    mode = startingMode
                     if keepOpen {
                         // Stay open: banner shows briefly, form already cleared
                         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {

@@ -487,13 +487,100 @@ enum AnthropicReview {
         """
     }
 
-    static func brief(issueID: String, title: String, sections: [(String, String)], initials: String, model: String,
-                      effort: String, maxTokens: Int, apiKey: String) async throws -> ReviewBrief {
+    /// Sends one Messages request whose answer must match `schema` (structured output), and
+    /// returns the answer parsed from its text block, with timings. Every outcome saves the
+    /// request and what came back (BriefRecorder, named after `recordID`); a successful answer
+    /// is saved under `answerKey` so it reads as JSON. `task` and `retry` complete the error
+    /// messages ("Claude declined to <task>", "..., then <retry>").
+    static func structured(recordID: String, task: String, retry: String, logCategory: String, answerKey: String,
+                           system: String, user: String, schema: [String: Any],
+                           model: String, effort: String, maxTokens: Int, apiKey: String)
+        async throws -> ([String: Any], BriefTiming) {
         var timing = BriefTiming(model: model, effort: effort, maxTokens: maxTokens)
         let started = Date()
         var req = request("messages", apiKey: apiKey)
         req.httpMethod = "POST"
+        let body: [String: Any] = [
+            "model": model,
+            "max_tokens": maxTokens,
+            "system": system,
+            "output_config": ["effort": effort, "format": ["type": "json_schema", "schema": schema]],
+            "messages": [["role": "user", "content": user]],
+        ]
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
+        timing.prepare = Date().timeIntervalSince(started)
+
+        let collector = TaskMetricsCollector()
+        let sent = Date()
+        // Every outcome below saves the request and what came back (BriefRecorder).
+        func record(_ response: Any?, error: String?) -> URL? {
+            BriefRecorder.save(issueID: recordID, request: body, response: response, error: error, timing: timing)
+        }
+        func fail(_ message: String, response: Any?) -> ReviewError {
+            ReviewError(message: message, recordURL: record(response, error: message))
+        }
+        let json: [String: Any]
+        do {
+            let (data, status) = try await sendRaw(req, delegate: collector)
+            do {
+                json = try checked(data, status: status)
+            } catch {
+                timing.request = Date().timeIntervalSince(sent)
+                let raw: Any = (try? JSONSerialization.jsonObject(with: data)) ?? String(decoding: data, as: UTF8.self)
+                BTLog.log("failed \(timing.logLine): \(error.localizedDescription)", category: logCategory)
+                throw fail(error.localizedDescription, response: raw)
+            }
+        } catch let error as ReviewError {
+            throw error
+        } catch {
+            timing.request = Date().timeIntervalSince(sent)
+            BTLog.log("failed \(timing.logLine): \(error.localizedDescription)", category: logCategory)
+            throw fail(error.localizedDescription, response: nil)
+        }
+        let received = Date()
+        timing.request = received.timeIntervalSince(sent)
+        if let t = collector.metrics?.transactionMetrics.last {
+            if let start = t.domainLookupStartDate ?? t.connectStartDate, let end = t.connectEndDate {
+                timing.connect = end.timeIntervalSince(start)
+            }
+            if let reqEnd = t.requestEndDate, let respStart = t.responseStartDate {
+                timing.waiting = respStart.timeIntervalSince(reqEnd)
+            }
+            if let respStart = t.responseStartDate, let respEnd = t.responseEndDate {
+                timing.download = respEnd.timeIntervalSince(respStart)
+            }
+            timing.requestID = (t.response as? HTTPURLResponse)?.value(forHTTPHeaderField: "request-id")
+        }
+        if let usage = json["usage"] as? [String: Any] {
+            timing.inputTokens = usage["input_tokens"] as? Int
+            timing.outputTokens = usage["output_tokens"] as? Int
+        }
+
+        switch json["stop_reason"] as? String {
+        case "refusal":
+            BTLog.log("refused \(timing.logLine)", category: logCategory)
+            throw fail("Claude declined to \(task).", response: json)
+        case "max_tokens":
+            BTLog.log("cut off \(timing.logLine)", category: logCategory)
+            throw fail("Claude's answer was cut off at the \(maxTokens.formatted())-token output limit "
+                + "(its thinking counts toward the limit) after \(BriefTiming.secs(timing.request)). "
+                + "Raise Output limit or lower Effort in Review settings, then \(retry).", response: json)
+        default: break
+        }
+        let blocks = json["content"] as? [[String: Any]] ?? []
+        guard let text = blocks.first(where: { $0["type"] as? String == "text" })?["text"] as? String,
+              let parsed = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any]
+        else { throw fail("Claude returned an unreadable answer.", response: json) }
+        timing.parse = Date().timeIntervalSince(received)
+        var saved = json
+        saved[answerKey] = parsed
+        timing.recordURL = record(saved, error: nil)
+        return (parsed, timing)
+    }
+
+    static func brief(issueID: String, title: String, sections: [(String, String)], initials: String, model: String,
+                      effort: String, maxTokens: Int, apiKey: String) async throws -> ReviewBrief {
         let document = sections
             .map { "<section name=\"\($0.0)\">\n\($0.1)\n</section>" }
             .joined(separator: "\n\n")
@@ -531,78 +618,10 @@ enum AnthropicReview {
             "required": ["summary", "points", "items"],
             "additionalProperties": false,
         ]
-        let body: [String: Any] = [
-            "model": model,
-            "max_tokens": maxTokens,
-            "system": systemPrompt(initials: initials),
-            "output_config": ["effort": effort, "format": ["type": "json_schema", "schema": schema]],
-            "messages": [["role": "user", "content": "Issue: \(title)\n\n\(document)"]],
-        ]
-        req.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        timing.prepare = Date().timeIntervalSince(started)
-
-        let collector = TaskMetricsCollector()
-        let sent = Date()
-        // Every outcome below saves the request and what came back (BriefRecorder).
-        func record(_ response: Any?, error: String?) -> URL? {
-            BriefRecorder.save(issueID: issueID, request: body, response: response, error: error, timing: timing)
-        }
-        func fail(_ message: String, response: Any?) -> ReviewError {
-            ReviewError(message: message, recordURL: record(response, error: message))
-        }
-        let json: [String: Any]
-        do {
-            let (data, status) = try await sendRaw(req, delegate: collector)
-            do {
-                json = try checked(data, status: status)
-            } catch {
-                timing.request = Date().timeIntervalSince(sent)
-                let raw: Any = (try? JSONSerialization.jsonObject(with: data)) ?? String(decoding: data, as: UTF8.self)
-                BTLog.log("failed \(timing.logLine): \(error.localizedDescription)", category: "brief")
-                throw fail(error.localizedDescription, response: raw)
-            }
-        } catch let error as ReviewError {
-            throw error
-        } catch {
-            timing.request = Date().timeIntervalSince(sent)
-            BTLog.log("failed \(timing.logLine): \(error.localizedDescription)", category: "brief")
-            throw fail(error.localizedDescription, response: nil)
-        }
-        let received = Date()
-        timing.request = received.timeIntervalSince(sent)
-        if let t = collector.metrics?.transactionMetrics.last {
-            if let start = t.domainLookupStartDate ?? t.connectStartDate, let end = t.connectEndDate {
-                timing.connect = end.timeIntervalSince(start)
-            }
-            if let reqEnd = t.requestEndDate, let respStart = t.responseStartDate {
-                timing.waiting = respStart.timeIntervalSince(reqEnd)
-            }
-            if let respStart = t.responseStartDate, let respEnd = t.responseEndDate {
-                timing.download = respEnd.timeIntervalSince(respStart)
-            }
-            timing.requestID = (t.response as? HTTPURLResponse)?.value(forHTTPHeaderField: "request-id")
-        }
-        if let usage = json["usage"] as? [String: Any] {
-            timing.inputTokens = usage["input_tokens"] as? Int
-            timing.outputTokens = usage["output_tokens"] as? Int
-        }
-
-        switch json["stop_reason"] as? String {
-        case "refusal":
-            BTLog.log("refused \(timing.logLine)", category: "brief")
-            throw fail("Claude declined to review this issue.", response: json)
-        case "max_tokens":
-            BTLog.log("cut off \(timing.logLine)", category: "brief")
-            throw fail("Claude's answer was cut off at the \(maxTokens.formatted())-token output limit "
-                + "(its thinking counts toward the limit) after \(BriefTiming.secs(timing.request)). "
-                + "Raise Output limit or lower Effort in Review settings, then Refresh.", response: json)
-        default: break
-        }
-        let blocks = json["content"] as? [[String: Any]] ?? []
-        guard let text = blocks.first(where: { $0["type"] as? String == "text" })?["text"] as? String,
-              let parsed = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any]
-        else { throw fail("Claude returned an unreadable answer.", response: json) }
+        let (parsed, timing) = try await structured(
+            recordID: issueID, task: "review this issue", retry: "Refresh", logCategory: "brief", answerKey: "brief",
+            system: systemPrompt(initials: initials), user: "Issue: \(title)\n\n\(document)", schema: schema,
+            model: model, effort: effort, maxTokens: maxTokens, apiKey: apiKey)
 
         func str(_ any: Any?) -> String { ((any as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
         let items: [ReviewItem] = (parsed["items"] as? [[String: Any]] ?? []).compactMap { item in
@@ -628,11 +647,6 @@ enum AnthropicReview {
                               answeredBy: answered ? (answeredBy.isEmpty ? "(answered, no line given)" : answeredBy) : nil)
         }
         let points = (parsed["points"] as? [String] ?? []).map { str($0) }.filter { !$0.isEmpty }
-        timing.parse = Date().timeIntervalSince(received)
-        // Saved with the answer parsed out of its text block, so the brief reads as JSON.
-        var saved = json
-        saved["brief"] = parsed
-        timing.recordURL = record(saved, error: nil)
         return ReviewBrief(summary: str(parsed["summary"]), points: points, items: items, timing: timing)
     }
 }

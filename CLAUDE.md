@@ -15,7 +15,9 @@ no database or API layer of its own. The project tracks its own development in `
   `CreateIssueView.swift`, `Models.swift`, `BeadsRunner.swift` (all `bd` subprocess wrappers),
   `BeadsEventsWatcher.swift` (real-time sync via `bd events tail`), `WorkspaceStore.swift`
   (shared per-workspace in-memory issue store, patched from events), `ReviewTools.swift`
-  (detail-panel "Needs you" review, replies appended to Notes, optional Claude Haiku), `BTLog.swift`
+  (detail-panel "Needs you" review, replies appended to Notes, optional Claude Haiku),
+  `FreeformCreate.swift` (create sheet's Describe mode: Claude proposes the form's fields),
+  `BTLog.swift`
 - **Build/config:** `Makefile`, `Info.plist`, `BeadsTracker.entitlements`, `.github/` (release
   workflow), `scripts/release-version.sh`, `scripts/release-notes.sh`, `.githooks/`
 - **Docs:** `README.md` (overview, install, links), `docs/` (user guide: how to use the app; keep

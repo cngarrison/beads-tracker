@@ -2499,7 +2499,7 @@ struct IssueEditSheet: View {
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        IssueFormContent(fields: $fields, showDependencies: false).padding()
+                        IssueFormContent(fields: $fields, showDependencies: false, showNotes: false).padding()
 
                         Divider()
                         
