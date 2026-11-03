@@ -89,6 +89,7 @@ struct AutoResizingTextArea: View {
     var placeholder:   String
     var minHeight:     CGFloat = 70
     var maxAutoHeight: CGFloat = 220
+    @Environment(\.undoManager) private var undoManager
 
     @State private var height:    CGFloat
     @State private var isManual   = false
@@ -114,6 +115,7 @@ struct AutoResizingTextArea: View {
                 }
                 TextEditor(text: $text)
                     .scrollContentBackground(.hidden)
+                    .onDisappear { clearStaleUndo(undoManager) }
                     .padding(4)
                     .background(GeometryReader { geo in
                         Color.clear
