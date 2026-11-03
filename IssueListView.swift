@@ -657,7 +657,7 @@ struct IssueListView: View {
         .padding(.horizontal).padding(.vertical, 5)
         .background {
             // ⌥⌘F focuses the find field (⌘F belongs to the issue list's search)
-            Button("Find in Details") { panelFindFocused = true }
+            Button("Find in Details") { focusOrSelectAll($panelFindFocused) }
                 .keyboardShortcut("f", modifiers: [.command, .option])
                 .opacity(0).frame(width: 0, height: 0)
                 .accessibilityHidden(true)
@@ -756,8 +756,9 @@ struct IssueListView: View {
         .frame(height: 34)
         .background(.bar)
         .background {
-            // ⌘F focuses the search field (a keyboard shortcut needs a button to hang on)
-            Button("Find") { searchFocused = true }
+            // ⌘F focuses the search field (a keyboard shortcut needs a button to hang on),
+            // or selects its text when it already has focus
+            Button("Find") { focusOrSelectAll($searchFocused) }
                 .keyboardShortcut("f", modifiers: .command)
                 .opacity(0).frame(width: 0, height: 0)
                 .accessibilityHidden(true)
@@ -765,6 +766,16 @@ struct IssueListView: View {
     }
 
     // MARK: - Helpers
+
+    /// Focuses a find field; if it already has focus (so setting it again does nothing), selects
+    /// its whole text instead, as ⌘F does in other Mac apps.
+    private func focusOrSelectAll(_ focus: FocusState<Bool>.Binding) {
+        if focus.wrappedValue {
+            NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
+        } else {
+            focus.wrappedValue = true
+        }
+    }
 
     private func emptyState(icon: String, title: String, message: String) -> some View {
         VStack(spacing: 12) {
