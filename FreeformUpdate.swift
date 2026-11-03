@@ -208,12 +208,7 @@ enum FreeformUpdate {
         let others = candidates.filter { $0.id != d.id }
         var titles = Dictionary(others.map { ($0.id, $0.title) }, uniquingKeysWith: { a, _ in a })
         for dep in (d.dependencies ?? []) + (d.dependents ?? []) where titles[dep.id] == nil { titles[dep.id] = dep.title }
-        let today: String = {
-            let f = DateFormatter()
-            f.locale = Locale(identifier: "en_US_POSIX")
-            f.dateFormat = "EEEE yyyy-MM-dd"
-            return f.string(from: Date())
-        }()
+        let today = todayLine()
         let list = others.map(FreeformCreate.candidateLine).joined(separator: "\n")
         let user = "<issue>\n\(currentState(d, titles: titles))\n</issue>\n\n<issues>\n\(list)\n</issues>\n\n"
             + "<request>\n\(text)\n</request>"
@@ -223,6 +218,34 @@ enum FreeformUpdate {
             schema: schema, model: model, effort: effort, maxTokens: maxTokens, apiKey: apiKey)
         BTLog.log("\(d.id) update proposal \(timing.logLine) candidates=\(others.count)", category: "freeform")
 
+        let (checked, skipped) = check(parsed["actions"] as? [[String: Any]] ?? [], detail: d, titles: titles)
+        let note = formatReply(text, ref: nil, initials: initials)
+        let actions = ordered(checked + [UpdateAction(kind: .note, value: note, summary: "Append to Notes: \(note)")])
+        let unclear = (parsed["unclear"] as? [String] ?? [])
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        if !skipped.isEmpty { BTLog.log("\(d.id) skipped: \(skipped.joined(separator: "; "))", category: "freeform") }
+        return UpdateProposal(actions: actions, unclear: unclear, skipped: skipped)
+    }
+
+    /// Today with its weekday ("Monday 2026-11-02"), so Claude can work out relative dates.
+    static func todayLine(_ date: Date = Date()) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "EEEE yyyy-MM-dd"
+        return f.string(from: date)
+    }
+
+    /// The changes in the order they run: fields, then links, then the note, and closing last.
+    static func ordered(_ actions: [UpdateAction]) -> [UpdateAction] {
+        actions.sorted { runOrder.firstIndex(of: $0.kind)! < runOrder.firstIndex(of: $1.kind)! }
+    }
+
+    /// Checks proposed changes (`kind`, `value`, `link_type`, `reason`) against the issue as it is
+    /// now: ids must be in `titles` (the issues Claude was shown, plus the issue's own links),
+    /// values must be ones the app sets, and changes that would leave things as they are are
+    /// skipped, with why.
+    static func check(_ raws: [[String: Any]], detail d: BeadsIssueDetail, titles: [String: String])
+        -> (actions: [UpdateAction], skipped: [String]) {
         func str(_ any: Any?) -> String { ((any as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
         func named(_ id: String) -> String { titles[id].map { "\(id) \u{201C}\($0)\u{201D}" } ?? id }
         let known = Set(titles.keys)
@@ -233,7 +256,7 @@ enum FreeformUpdate {
         var seen = Set<String>()
 
         var actions: [UpdateAction] = []
-        for raw in parsed["actions"] as? [[String: Any]] ?? [] {
+        for raw in raws {
             guard let kind = UpdateAction.Kind(rawValue: str(raw["kind"])), kind != .note else { continue }
             let v = str(raw["value"])
             let linkType = str(raw["link_type"])
@@ -326,12 +349,7 @@ enum FreeformUpdate {
             }
         }
 
-        let note = formatReply(text, ref: nil, initials: initials)
-        actions.append(UpdateAction(kind: .note, value: note, summary: "Append to Notes: \(note)"))
-        actions.sort { runOrder.firstIndex(of: $0.kind)! < runOrder.firstIndex(of: $1.kind)! }
-        let unclear = (parsed["unclear"] as? [String] ?? []).map { str($0) }.filter { !$0.isEmpty }
-        if !skipped.isEmpty { BTLog.log("\(d.id) skipped: \(skipped.joined(separator: "; "))", category: "freeform") }
-        return UpdateProposal(actions: actions, unclear: unclear, skipped: skipped)
+        return (actions, skipped)
     }
 
     /// Makes one change with its own `bd` command. Blocking; run off the main thread.
